@@ -1,102 +1,487 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { getDatasets, createSession, Dataset } from "@/lib/api";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Brain, Database, Loader2, Rows3, Columns3 } from "lucide-react";
+import {
+  getDatasets, createSession, runAutoML, getAutoMLStatus,
+  Dataset, AutoMLStatus,
+} from "@/lib/api";
+import {
+  Brain, Database, Loader2, Rows3, Columns3,
+  Upload, Sparkles, CheckCircle2, AlertTriangle, ArrowRight,
+} from "lucide-react";
 
 export default function Home() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState<string | null>(null);
+  const [tab, setTab] = useState<"playground" | "automl">("playground");
+  const [lastSession, setLastSession] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
-    getDatasets().then(setDatasets).finally(() => setLoading(false));
+    getDatasets()
+      .then(setDatasets)
+      .catch(() => setError("Could not load datasets. Is the backend running?"))
+      .finally(() => setLoading(false));
+
+    const last = localStorage.getItem("ml_last_session");
+    if (last) setLastSession(last);
   }, []);
 
   async function start(datasetId: string) {
     setStarting(datasetId);
+    setError(null);
     try {
       const session = await createSession(datasetId);
+      localStorage.setItem("ml_last_session", session.id);
       router.push(`/playground/${session.id}`);
-    } catch (e) {
-      console.error(e);
+    } catch (e: any) {
+      setError(e.message || "Failed to start session.");
       setStarting(null);
     }
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800">
-      <div className="max-w-5xl mx-auto px-6 py-16">
+    <main className="h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 flex flex-col overflow-hidden">
+      <div className="max-w-5xl mx-auto px-6 w-full flex flex-col h-full py-8">
 
         {/* Header */}
-        <div className="text-center mb-14">
-          <div className="flex items-center justify-center gap-3 mb-4">
-            <div className="p-3 rounded-2xl bg-blue-500/10 border border-blue-500/20">
-              <Brain className="w-8 h-8 text-blue-400" />
+        <div className="text-center mb-6 flex-shrink-0">
+          <div className="flex items-center justify-center gap-3 mb-3">
+            <div className="p-2.5 rounded-2xl bg-blue-500/10 border border-blue-500/20">
+              <Brain className="w-7 h-7 text-blue-400" />
             </div>
           </div>
-          <h1 className="text-4xl font-bold text-white mb-3 tracking-tight">
+          <h1 className="text-3xl font-bold text-white mb-2 tracking-tight">
             ML Playground
           </h1>
-          <p className="text-slate-400 text-lg max-w-xl mx-auto">
-            Walk through the complete machine learning lifecycle step by step.
+          <p className="text-slate-400 text-sm max-w-lg mx-auto">
+            Walk through the complete ML lifecycle step by step.
             Every decision explained by AI.
           </p>
         </div>
 
-        {/* Dataset grid */}
-        {loading ? (
-          <div className="flex justify-center mt-20">
-            <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
+        {/* Error banner */}
+        {error && (
+          <div className="flex items-center gap-2 px-4 py-3 mb-4 rounded-xl
+            bg-red-500/10 border border-red-500/20 text-red-400 text-sm flex-shrink-0">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+            {error}
           </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-            {datasets.map((ds) => (
-              <Card key={ds.id}
-                className="bg-slate-800/60 border-slate-700/60 hover:border-blue-500/50 hover:bg-slate-800 transition-all duration-200 group">
-                <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between">
-                    <div className="p-2 rounded-lg bg-slate-700/50 group-hover:bg-blue-500/10 transition-colors">
-                      <Database className="w-4 h-4 text-slate-400 group-hover:text-blue-400 transition-colors" />
-                    </div>
-                    <Badge variant="secondary"
-                      className={ds.task === "classification"
-                        ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                        : "bg-amber-500/10 text-amber-400 border-amber-500/20"}>
-                      {ds.task}
-                    </Badge>
-                  </div>
-                  <CardTitle className="text-white text-lg mt-3">{ds.name}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex gap-4 text-sm text-slate-400 mb-5">
-                    <span className="flex items-center gap-1.5">
-                      <Rows3 className="w-3.5 h-3.5" />{ds.rows.toLocaleString()} rows
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <Columns3 className="w-3.5 h-3.5" />{ds.cols} cols
-                    </span>
-                  </div>
-                  <div className="text-xs text-slate-500 mb-4">
-                    Target: <span className="text-slate-300 font-mono">{ds.target}</span>
-                  </div>
-                  <Button className="w-full bg-blue-600 hover:bg-blue-500 text-white"
-                    onClick={() => start(ds.id)}
-                    disabled={starting === ds.id}>
-                    {starting === ds.id
-                      ? <><Loader2 className="w-4 h-4 animate-spin mr-2" />Starting...</>
-                      : "Start Playground →"}
-                  </Button>
-                </CardContent>
-              </Card>
+        )}
+
+        {/* Resume last session */}
+        {lastSession && (
+          <div className="flex justify-center mb-4 flex-shrink-0">
+            <button
+              onClick={() => router.push(`/playground/${lastSession}`)}
+              className="flex items-center gap-2 text-xs px-4 py-2 rounded-lg
+                border border-slate-700 text-slate-400
+                hover:text-white hover:border-slate-600 transition-colors">
+              <ArrowRight className="w-3.5 h-3.5" />
+              Resume last session
+            </button>
+          </div>
+        )}
+
+        {/* Tabs */}
+        <div className="flex justify-center mb-5 flex-shrink-0">
+          <div className="flex gap-1 bg-slate-800/60 p-1 rounded-xl border border-slate-700/50">
+            {(["playground", "automl"] as const).map(t => (
+              <button key={t} onClick={() => setTab(t)}
+                className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${tab === t
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "text-slate-400 hover:text-slate-200"}`}>
+                {t === "playground" ? "🎮 Guided Playground" : "⚡ AutoML"}
+              </button>
             ))}
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-hidden">
+          {tab === "playground" && (
+            <PlaygroundTab
+              datasets={datasets}
+              loading={loading}
+              starting={starting}
+              onStart={start}
+            />
+          )}
+          {tab === "automl" && <AutoMLTab />}
+        </div>
+
+        <p className="text-center text-xs text-slate-600 mt-3 flex-shrink-0">
+          12-step ML lifecycle · AI explanations · Python export · AutoML
+        </p>
+      </div>
+    </main>
+  );
+}
+
+// ─── PLAYGROUND TAB ───────────────────────────────────────────────────────────
+
+function PlaygroundTab({ datasets, loading, starting, onStart }: {
+  datasets: Dataset[];
+  loading: boolean;
+  starting: string | null;
+  onStart: (id: string) => void;
+}) {
+  if (loading) return (
+    <div className="flex justify-center py-16">
+      <Loader2 className="w-7 h-7 animate-spin text-blue-400" />
+    </div>
+  );
+
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4
+      h-full content-start overflow-y-auto pb-2">
+      {datasets.map(ds => (
+        <div key={ds.id}
+          className="bg-slate-800/60 border border-slate-700/60
+            hover:border-blue-500/50 hover:bg-slate-800
+            transition-all duration-200 group rounded-2xl p-4
+            cursor-pointer flex flex-col"
+          onClick={() => onStart(ds.id)}>
+
+          <div className="flex items-start justify-between mb-3">
+            <div className="p-1.5 rounded-lg bg-slate-700/50
+              group-hover:bg-blue-500/10 transition-colors">
+              <Database className="w-4 h-4 text-slate-400
+                group-hover:text-blue-400 transition-colors" />
+            </div>
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium border ${ds.task === "classification"
+                ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                : "bg-amber-500/10 text-amber-400 border-amber-500/20"}`}>
+              {ds.task}
+            </span>
+          </div>
+
+          <h3 className="text-white font-semibold text-base mb-0.5">{ds.name}</h3>
+          <p className="text-xs text-slate-500 font-mono mb-3">
+            target: {ds.target}
+          </p>
+
+          <div className="flex items-center gap-3 text-xs text-slate-400 mb-4">
+            <span className="flex items-center gap-1">
+              <Rows3 className="w-3 h-3" />{ds.rows.toLocaleString()}
+            </span>
+            <span className="flex items-center gap-1">
+              <Columns3 className="w-3 h-3" />{ds.cols} cols
+            </span>
+          </div>
+
+          <div className="mt-auto w-full flex items-center justify-center gap-2
+            py-2 rounded-lg bg-blue-600 hover:bg-blue-500
+            text-white text-sm font-medium transition-colors">
+            {starting === ds.id
+              ? <><Loader2 className="w-3.5 h-3.5 animate-spin" />Starting...</>
+              : "Start Playground →"}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── AUTOML TAB ───────────────────────────────────────────────────────────────
+
+function AutoMLTab() {
+  const [file, setFile] = useState<File | null>(null);
+  const [targetCol, setTargetCol] = useState("");
+  const [columns, setColumns] = useState<string[]>([]);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [status, setStatus] = useState<AutoMLStatus | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const pollRef = useRef<NodeJS.Timeout | null>(null);
+
+  async function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setFile(f);
+    setError(null);
+    try {
+      const text = await f.text();
+      const firstLine = text.split("\n")[0];
+      const cols = firstLine.split(",").map(c => c.trim().replace(/"/g, ""));
+      setColumns(cols);
+      setTargetCol(cols[cols.length - 1]);
+    } catch {
+      setColumns([]);
+    }
+  }
+
+  async function upload() {
+    if (!file || !targetCol) return;
+    setUploading(true);
+    setError(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("target_col", targetCol);
+      const res = await runAutoML(fd);
+      setJobId(res.job_id);
+      setStatus({ status: "running", progress: 0, log: [] });
+    } catch (e: any) {
+      setError(e.message || "Upload failed.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!jobId) return;
+    pollRef.current = setInterval(async () => {
+      try {
+        const s = await getAutoMLStatus(jobId);
+        setStatus(s);
+        if (s.status === "done" || s.status === "error") {
+          clearInterval(pollRef.current!);
+        }
+      } catch {
+        clearInterval(pollRef.current!);
+        setError("Lost connection to server.");
+      }
+    }, 1500);
+    return () => clearInterval(pollRef.current!);
+  }, [jobId]);
+
+  function reset() {
+    setJobId(null);
+    setStatus(null);
+    setFile(null);
+    setColumns([]);
+    setError(null);
+    setTargetCol("");
+  }
+
+  return (
+    <div className="h-full overflow-y-auto">
+      <div className="max-w-xl mx-auto space-y-4">
+
+        {error && (
+          <div className="flex items-center gap-2 px-4 py-3 rounded-xl
+            bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+            {error}
+          </div>
+        )}
+
+        {/* Upload zone */}
+        {!jobId && (
+          <>
+            <div
+              onClick={() => fileRef.current?.click()}
+              className="border-2 border-dashed border-slate-700
+                hover:border-blue-500/50 rounded-2xl p-8
+                text-center cursor-pointer transition-colors group">
+              <Upload className="w-8 h-8 text-slate-600
+                group-hover:text-blue-400 mx-auto mb-3 transition-colors" />
+              <p className="text-slate-300 font-medium mb-1">
+                {file ? file.name : "Drop your CSV or Excel file here"}
+              </p>
+              <p className="text-xs text-slate-500">Max 50MB · CSV or Excel</p>
+              <input
+                ref={fileRef} type="file"
+                accept=".csv,.xlsx,.xls"
+                onChange={onFileChange}
+                className="hidden"
+              />
+            </div>
+
+            {columns.length > 0 && (
+              <div className="bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
+                <label className="text-xs text-slate-400 font-medium block mb-2">
+                  Target column
+                </label>
+                <select
+                  value={targetCol}
+                  onChange={e => setTargetCol(e.target.value)}
+                  className="w-full text-sm bg-slate-900 border border-slate-700
+                    rounded-lg px-3 py-2 text-white
+                    focus:outline-none focus:border-blue-500">
+                  {columns.map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <button
+              onClick={upload}
+              disabled={!file || !targetCol || uploading}
+              className="w-full py-3 bg-blue-600 hover:bg-blue-500
+                disabled:opacity-40 disabled:cursor-not-allowed
+                text-white font-medium rounded-xl
+                transition-colors flex items-center justify-center gap-2">
+              {uploading
+                ? <><Loader2 className="w-4 h-4 animate-spin" />Uploading...</>
+                : <><Sparkles className="w-4 h-4" />Run AutoML</>}
+            </button>
+
+            <div className="bg-slate-800/40 border border-slate-700/40 rounded-xl p-4">
+              <p className="text-xs text-slate-400 font-medium mb-2">
+                What AutoML does automatically:
+              </p>
+              <div className="space-y-1.5">
+                {[
+                  "Detects task type (classification / regression)",
+                  "Handles missing values with median imputation",
+                  "Encodes all categorical columns",
+                  "Runs Optuna hyperparameter search (20 trials)",
+                  "Trains best Random Forest model",
+                  "Returns metrics and feature importance",
+                ].map((item, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs text-slate-500">
+                    <span className="w-1 h-1 rounded-full bg-slate-600 flex-shrink-0" />
+                    {item}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Progress */}
+        {jobId && status && status.status === "running" && (
+          <div className="bg-slate-800/60 border border-slate-700/60 rounded-2xl p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
+              <span className="text-sm font-medium text-white">
+                AutoML running...
+              </span>
+              <span className="ml-auto text-sm font-mono text-blue-400">
+                {status.progress}%
+              </span>
+            </div>
+            <div className="h-2 bg-slate-700 rounded-full mb-4">
+              <div
+                className="h-2 bg-blue-500 rounded-full transition-all duration-500"
+                style={{ width: `${status.progress}%` }}
+              />
+            </div>
+            <div className="space-y-1">
+              {status.log?.map((line, i) => (
+                <p key={i} className="text-xs text-slate-400 font-mono">{line}</p>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Error state */}
+        {status?.status === "error" && (
+          <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-5">
+            <div className="flex items-center gap-2 mb-2">
+              <AlertTriangle className="w-4 h-4 text-red-400" />
+              <span className="text-sm font-medium text-red-400">AutoML failed</span>
+            </div>
+            <p className="text-xs text-red-400/70 mb-3">{status.error}</p>
+            <button onClick={reset}
+              className="text-xs text-slate-400 hover:text-white underline">
+              Try again
+            </button>
+          </div>
+        )}
+
+        {/* Results */}
+        {status?.status === "done" && (
+          <div className="space-y-4">
+            <div className="bg-slate-800/60 border border-slate-700/60 rounded-2xl p-5">
+              <div className="flex items-center gap-2 mb-4">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                <span className="text-sm font-semibold text-white">
+                  AutoML complete
+                </span>
+                <span className={`ml-auto text-xs px-2 py-0.5 rounded-full ${status.task === "classification"
+                    ? "bg-emerald-500/10 text-emerald-400"
+                    : "bg-amber-500/10 text-amber-400"}`}>
+                  {status.task}
+                </span>
+              </div>
+
+              {/* Metrics */}
+              <div className="grid grid-cols-2 gap-2 mb-4">
+                {Object.entries(status.metrics || {}).map(([k, v]) => (
+                  <div key={k} className="bg-slate-900 rounded-xl p-3">
+                    <div className="text-xs text-slate-500">{k.replace(/_/g, " ")}</div>
+                    <div className="text-lg font-bold font-mono text-white mt-0.5">
+                      {typeof v === "number" ? v.toFixed(4) : String(v)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Pipeline summary */}
+              {status.pipeline_summary && (
+                <div className="bg-slate-900/60 rounded-xl p-3 mb-4">
+                  <p className="text-xs text-slate-500 font-medium mb-2 uppercase tracking-wider">
+                    Pipeline used
+                  </p>
+                  <div className="space-y-1.5">
+                    {[
+                      ["Missing values", "Median imputation"],
+                      ["Encoding", "Label encoding"],
+                      ["Model", `Random Forest (${status.pipeline_summary.n_trials} Optuna trials)`],
+                      ["Best CV score", String(status.pipeline_summary.best_trial_score)],
+                    ].map(([k, v]) => (
+                      <div key={k} className="flex justify-between text-xs">
+                        <span className="text-slate-500">{k}</span>
+                        <span className="text-slate-300 font-mono">{v}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Feature importance */}
+              {status.feature_importance &&
+                Object.keys(status.feature_importance).length > 0 && (
+                  <div>
+                    <p className="text-xs text-slate-500 font-medium mb-2 uppercase tracking-wider">
+                      Top features
+                    </p>
+                    <div className="space-y-2">
+                      {Object.entries(status.feature_importance)
+                        .slice(0, 8)
+                        .map(([name, val], i) => {
+                          const max = Object.values(status.feature_importance!)[0];
+                          return (
+                            <div key={name}>
+                              <div className="flex justify-between mb-0.5">
+                                <span className="text-xs text-slate-400 truncate pr-2">
+                                  {name}
+                                </span>
+                                <span className="text-xs font-mono text-slate-500">
+                                  {Number(val).toFixed(3)}
+                                </span>
+                              </div>
+                              <div className="h-1.5 bg-slate-700 rounded-full">
+                                <div className="h-1.5 rounded-full transition-all"
+                                  style={{
+                                    width: `${(Number(val) / Number(max)) * 100}%`,
+                                    background: i === 0 ? "#3b82f6" : "#334155",
+                                  }} />
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
+            </div>
+
+            <button onClick={reset}
+              className="w-full py-2.5 bg-slate-800 hover:bg-slate-700
+                text-slate-300 text-sm font-medium rounded-xl
+                transition-colors border border-slate-700">
+              Run another dataset
+            </button>
           </div>
         )}
       </div>
-    </main>
+    </div>
   );
 }

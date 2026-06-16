@@ -1,8 +1,10 @@
 import uuid
 import json
+import asyncio
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +15,7 @@ from sklearn.impute import IterativeImputer
 from sklearn.preprocessing import (
     StandardScaler, MinMaxScaler, RobustScaler,
     MaxAbsScaler, QuantileTransformer, PowerTransformer,
-    LabelEncoder, OrdinalEncoder
+    LabelEncoder, OrdinalEncoder,
 )
 
 from app.core.database import get_db
@@ -21,7 +23,7 @@ from app.models.session import MLSession, StepResult as StepResultModel, Trainin
 from app.schemas.session import (
     SessionCreate, SessionResponse,
     StepRequest, StepResponse,
-    TrainRequest, TrainResponse
+    TrainRequest, TrainResponse,
 )
 from app.services.ml.dataset import load_dataset
 from app.services.ml import preprocessing
@@ -33,6 +35,16 @@ from app.services.export.code_gen import generate_pipeline_code
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 META_PATH = Path(__file__).parent.parent / "data" / "meta.json"
+
+# Thread pool for running blocking ML work off the async event loop
+_ml_executor = ThreadPoolExecutor(max_workers=4)
+
+# Resource limits
+MAX_TRAINING_SECONDS = 120
+MAX_DATASET_ROWS     = 100_000
+
+# Models that have defined Optuna search spaces
+TUNABLE_MODELS = ["random_forest", "xgboost"]
 
 
 def _load_meta() -> dict:
@@ -46,7 +58,8 @@ def _load_meta() -> dict:
 async def create_session(body: SessionCreate, db: AsyncSession = Depends(get_db)):
     meta = _load_meta()
     if body.dataset_id not in meta:
-        raise HTTPException(status_code=404, detail="Dataset not found")
+        raise HTTPException(status_code=404, detail=f"Dataset '{body.dataset_id}' not found.")
+
     session = MLSession(
         dataset_id=body.dataset_id,
         task_type=meta[body.dataset_id]["task"],
@@ -67,52 +80,124 @@ async def get_session(session_id: uuid.UUID, db: AsyncSession = Depends(get_db))
 # ─── STEP ENDPOINTS ───────────────────────────────────────────────────────────
 
 @router.post("/{session_id}/steps/missing", response_model=StepResponse)
-async def step_missing(session_id: uuid.UUID, body: StepRequest, db: AsyncSession = Depends(get_db)):
-    return await _run_step(session_id, "missing_values", body, db,
-        lambda df, t, p, m: preprocessing.handle_missing(df, t, p))
+async def step_missing(
+    session_id: uuid.UUID, body: StepRequest, db: AsyncSession = Depends(get_db)
+):
+    return await _run_step(
+        session_id, "missing_values", body, db,
+        lambda df, t, p, m: preprocessing.handle_missing(df, t, p),
+    )
 
 
 @router.post("/{session_id}/steps/outliers", response_model=StepResponse)
-async def step_outliers(session_id: uuid.UUID, body: StepRequest, db: AsyncSession = Depends(get_db)):
-    return await _run_step(session_id, "outliers", body, db,
-        lambda df, t, p, m: preprocessing.handle_outliers(df, t, p))
+async def step_outliers(
+    session_id: uuid.UUID, body: StepRequest, db: AsyncSession = Depends(get_db)
+):
+    return await _run_step(
+        session_id, "outliers", body, db,
+        lambda df, t, p, m: preprocessing.handle_outliers(df, t, p),
+    )
 
 
 @router.post("/{session_id}/steps/features", response_model=StepResponse)
-async def step_features(session_id: uuid.UUID, body: StepRequest, db: AsyncSession = Depends(get_db)):
-    return await _run_step(session_id, "feature_engineering", body, db,
-        lambda df, t, p, m: preprocessing.handle_feature_engineering(df, t, p, m["target"]))
+async def step_features(
+    session_id: uuid.UUID, body: StepRequest, db: AsyncSession = Depends(get_db)
+):
+    return await _run_step(
+        session_id, "feature_engineering", body, db,
+        lambda df, t, p, m: preprocessing.handle_feature_engineering(df, t, p, m["target"]),
+    )
 
 
 @router.post("/{session_id}/steps/encoding", response_model=StepResponse)
-async def step_encoding(session_id: uuid.UUID, body: StepRequest, db: AsyncSession = Depends(get_db)):
-    return await _run_step(session_id, "encoding", body, db,
-        lambda df, t, p, m: preprocessing.handle_encoding(df, t, p, m["target"]))
+async def step_encoding(
+    session_id: uuid.UUID, body: StepRequest, db: AsyncSession = Depends(get_db)
+):
+    return await _run_step(
+        session_id, "encoding", body, db,
+        lambda df, t, p, m: preprocessing.handle_encoding(df, t, p, m["target"]),
+    )
 
 
 @router.post("/{session_id}/steps/selection", response_model=StepResponse)
-async def step_selection(session_id: uuid.UUID, body: StepRequest, db: AsyncSession = Depends(get_db)):
-    return await _run_step(session_id, "feature_selection", body, db,
-        lambda df, t, p, m: preprocessing.handle_feature_selection(df, t, p, m["target"]))
+async def step_selection(
+    session_id: uuid.UUID, body: StepRequest, db: AsyncSession = Depends(get_db)
+):
+    return await _run_step(
+        session_id, "feature_selection", body, db,
+        lambda df, t, p, m: preprocessing.handle_feature_selection(df, t, p, m["target"]),
+    )
 
 
 @router.post("/{session_id}/steps/scaling", response_model=StepResponse)
-async def step_scaling(session_id: uuid.UUID, body: StepRequest, db: AsyncSession = Depends(get_db)):
-    return await _run_step(session_id, "scaling", body, db,
-        lambda df, t, p, m: preprocessing.handle_scaling(df, t, p, m["target"]))
+async def step_scaling(
+    session_id: uuid.UUID, body: StepRequest, db: AsyncSession = Depends(get_db)
+):
+    return await _run_step(
+        session_id, "scaling", body, db,
+        lambda df, t, p, m: preprocessing.handle_scaling(df, t, p, m["target"]),
+    )
 
 
 # ─── TRAIN ENDPOINT ───────────────────────────────────────────────────────────
 
 @router.post("/{session_id}/train", response_model=TrainResponse)
-async def train(session_id: uuid.UUID, body: TrainRequest, db: AsyncSession = Depends(get_db)):
+async def train(
+    session_id: uuid.UUID,
+    body: TrainRequest,
+    db: AsyncSession = Depends(get_db),
+):
     session = await _get_session_or_404(session_id, db)
     meta = _load_meta()
     dataset_meta = meta[session.dataset_id]
     target_col = dataset_meta["target"]
 
-    df = _replay_pipeline(session)
-    result = train_model(df, target_col, session.task_type, body.model_name, body.params, body.test_size)
+    try:
+        df = load_dataset(session.dataset_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Dataset file not found.")
+
+    if len(df) > MAX_DATASET_ROWS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Dataset has {len(df)} rows. Maximum allowed: {MAX_DATASET_ROWS}.",
+        )
+
+    loop = asyncio.get_event_loop()
+    try:
+        result = await asyncio.wait_for(
+            loop.run_in_executor(
+                _ml_executor,
+                lambda: train_model(
+                    df,
+                    target_col,
+                    session.task_type,
+                    body.model_name,
+                    body.params,
+                    body.test_size,
+                    pipeline_state=dict(session.pipeline_state),
+                ),
+            ),
+            timeout=MAX_TRAINING_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=408,
+            detail=(
+                f"Training timed out after {MAX_TRAINING_SECONDS}s. "
+                "Try a simpler model or reduce dataset size."
+            ),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Training failed: {str(e)}. "
+                "Ensure encoding was applied before training."
+            ),
+        )
 
     run = TrainingRun(
         session_id=session_id,
@@ -120,7 +205,7 @@ async def train(session_id: uuid.UUID, body: TrainRequest, db: AsyncSession = De
         params=body.params,
         metrics=result["metrics"],
         feature_importance=result["feature_importance"],
-        pipeline_config=session.pipeline_state,
+        pipeline_config=dict(session.pipeline_state),
     )
     db.add(run)
     await db.commit()
@@ -130,6 +215,181 @@ async def train(session_id: uuid.UUID, body: TrainRequest, db: AsyncSession = De
         run_id=run.id,
         model=result["model"],
         metrics=result["metrics"],
+        feature_importance=result["feature_importance"],
+        train_size=result["train_size"],
+        test_size=result["test_size"],
+        n_features=result["n_features"],
+    )
+
+
+# ─── TUNE ENDPOINT ────────────────────────────────────────────────────────────
+
+@router.post("/{session_id}/tune", response_model=TrainResponse)
+async def tune(
+    session_id: uuid.UUID,
+    body: TrainRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    import optuna
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    from sklearn.model_selection import cross_val_score, StratifiedKFold, KFold
+    from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+    from xgboost import XGBClassifier, XGBRegressor
+
+    session = await _get_session_or_404(session_id, db)
+    meta = _load_meta()
+    dataset_meta = meta[session.dataset_id]
+    target_col = dataset_meta["target"]
+    task = session.task_type
+
+    # Only tune supported models — fall back to random_forest for others
+    tune_model = body.model_name if body.model_name in TUNABLE_MODELS else "random_forest"
+
+    df = load_dataset(session.dataset_id)
+
+    # Build split-aware training data for the search
+    from app.services.ml.training import _apply_pipeline_split_aware
+    from sklearn.model_selection import train_test_split
+
+    X_raw = df.drop(columns=[target_col])
+    y     = df[target_col]
+
+    stratify = y if task == "classification" else None
+    X_train_raw, X_test_raw, y_train, y_test = train_test_split(
+        X_raw, y, test_size=body.test_size, random_state=42, stratify=stratify
+    )
+
+    X_train, _ = _apply_pipeline_split_aware(
+        X_train_raw.copy(),
+        X_test_raw.copy(),
+        y_train,
+        dict(session.pipeline_state),
+        target_col,
+    )
+    X_train = X_train.select_dtypes(include="number")
+
+    cv = (
+        StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+        if task == "classification"
+        else KFold(n_splits=3, shuffle=True, random_state=42)
+    )
+    scoring = "f1_weighted" if task == "classification" else "r2"
+
+    def objective(trial: "optuna.Trial") -> float:
+        if tune_model == "random_forest":
+            params = {
+                "n_estimators":      trial.suggest_int("n_estimators", 50, 300),
+                "max_depth":         trial.suggest_int("max_depth", 2, 20),
+                "min_samples_split": trial.suggest_int("min_samples_split", 2, 10),
+            }
+            model = (
+                RandomForestClassifier(**params, random_state=42)
+                if task == "classification"
+                else RandomForestRegressor(**params, random_state=42)
+            )
+        else:  # xgboost
+            params = {
+                "n_estimators":  trial.suggest_int("n_estimators", 50, 300),
+                "max_depth":     trial.suggest_int("max_depth", 2, 12),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3),
+            }
+            model = (
+                XGBClassifier(
+                    **params, random_state=42,
+                    verbosity=0, eval_metric="logloss",
+                )
+                if task == "classification"
+                else XGBRegressor(**params, random_state=42, verbosity=0)
+            )
+
+        scores = cross_val_score(model, X_train, y_train, cv=cv, scoring=scoring)
+        return float(scores.mean())
+
+    loop = asyncio.get_event_loop()
+
+    try:
+        def _run_study():
+            study = optuna.create_study(direction="maximize")
+            study.optimize(objective, n_trials=20, timeout=60)
+            return study
+
+        study = await asyncio.wait_for(
+            loop.run_in_executor(_ml_executor, _run_study),
+            timeout=90,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=408,
+            detail="Hyperparameter search timed out after 90s.",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Tuning failed: {str(e)}",
+        )
+
+    best_params = study.best_params
+    trials_data = [
+        {
+            "number": t.number,
+            "value":  round(t.value, 4),
+            "params": t.params,
+        }
+        for t in study.trials
+        if t.value is not None
+    ]
+
+    # Train final model using best params — use the same model that was tuned
+    try:
+        result = await asyncio.wait_for(
+            loop.run_in_executor(
+                _ml_executor,
+                lambda: train_model(
+                    df,
+                    target_col,
+                    task,
+                    tune_model,           # must match the tuned model
+                    best_params,
+                    body.test_size,
+                    pipeline_state=dict(session.pipeline_state),
+                ),
+            ),
+            timeout=MAX_TRAINING_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=408,
+            detail=f"Final training timed out after {MAX_TRAINING_SECONDS}s.",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Final training with best params failed: {str(e)}",
+        )
+
+    final_metrics = {
+        **result["metrics"],
+        "best_trial_score": round(study.best_value, 4),
+        "n_trials":         len(study.trials),
+        "trials":           trials_data,
+    }
+
+    run = TrainingRun(
+        session_id=session_id,
+        model_name=tune_model,
+        params=best_params,
+        metrics=final_metrics,
+        feature_importance=result["feature_importance"],
+        pipeline_config=dict(session.pipeline_state),
+    )
+    db.add(run)
+    await db.commit()
+    await db.refresh(run)
+
+    return TrainResponse(
+        run_id=run.id,
+        model=tune_model,
+        metrics=final_metrics,
         feature_importance=result["feature_importance"],
         train_size=result["train_size"],
         test_size=result["test_size"],
@@ -153,7 +413,7 @@ async def export_code(session_id: uuid.UUID, db: AsyncSession = Depends(get_db))
 
     session_data = {
         "dataset_id": session.dataset_id,
-        "task_type": session.task_type,
+        "task_type":  session.task_type,
         "pipeline_state": {
             **session.pipeline_state,
             **({"model": {"name": last_run.model_name}} if last_run else {}),
@@ -164,24 +424,119 @@ async def export_code(session_id: uuid.UUID, db: AsyncSession = Depends(get_db))
     return PlainTextResponse(content=code, media_type="text/plain")
 
 
+# ─── RUNS ENDPOINT ────────────────────────────────────────────────────────────
+
+@router.get("/{session_id}/runs")
+async def get_runs(session_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(TrainingRun)
+        .where(TrainingRun.session_id == session_id)
+        .order_by(desc(TrainingRun.created_at))
+    )
+    runs = result.scalars().all()
+    return [
+        {
+            "id":                str(r.id),
+            "model_name":        r.model_name,
+            "params":            r.params,
+            "metrics":           r.metrics,
+            "feature_importance":r.feature_importance,
+            "created_at":        r.created_at.isoformat(),
+        }
+        for r in runs
+    ]
+
+
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
 
-async def _get_session_or_404(session_id: uuid.UUID, db: AsyncSession) -> MLSession:
-    result = await db.execute(select(MLSession).where(MLSession.id == session_id))
+async def _get_session_or_404(
+    session_id: uuid.UUID, db: AsyncSession
+) -> MLSession:
+    result = await db.execute(
+        select(MLSession).where(MLSession.id == session_id)
+    )
     session = result.scalar_one_or_none()
     if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail="Session not found.")
     return session
 
 
-async def _run_step(session_id, step_name, body, db, fn) -> StepResponse:
+async def _run_step(
+    session_id: uuid.UUID,
+    step_name: str,
+    body: StepRequest,
+    db: AsyncSession,
+    fn,
+) -> StepResponse:
     session = await _get_session_or_404(session_id, db)
     meta = _load_meta()
     dataset_meta = meta[session.dataset_id]
 
-    df = load_dataset(session.dataset_id)
-    result: PipelineStepResult = fn(df, body.technique, body.params, dataset_meta)
-    explanation = await get_explanation(result, dataset_meta["name"])
+    # If step already applied, return the existing result from DB
+    if step_name in session.pipeline_state:
+        existing = await db.execute(
+            select(StepResultModel)
+            .where(
+                StepResultModel.session_id == session_id,
+                StepResultModel.step_name == step_name,
+            )
+            .order_by(desc(StepResultModel.created_at))
+            .limit(1)
+        )
+        existing_rec = existing.scalar_one_or_none()
+        if existing_rec:
+            return StepResponse(
+                step=existing_rec.step_name,
+                technique=existing_rec.technique,
+                params=existing_rec.params,
+                stats=existing_rec.stats,
+                warnings=existing_rec.warnings,
+                ai_explanation=existing_rec.ai_explanation or "",
+            )
+        raise HTTPException(
+            status_code=409,
+            detail=f"Step '{step_name}' already applied. Start a new session to change it.",
+        )
+
+    try:
+        df = load_dataset(session.dataset_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+
+    loop = asyncio.get_event_loop()
+    try:
+        result: PipelineStepResult = await loop.run_in_executor(
+            _ml_executor,
+            lambda: fn(df, body.technique, body.params, dataset_meta),
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "step":       step_name,
+                "technique":  body.technique,
+                "error":      str(e),
+                "suggestion": (
+                    "Check that your dataset has the expected "
+                    "column types for this technique."
+                ),
+            },
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "step":      step_name,
+                "technique": body.technique,
+                "error":     str(e),
+            },
+        )
+
+    # AI explanation — non-blocking, falls back gracefully
+    try:
+        explanation = await get_explanation(result, dataset_meta["name"])
+    except Exception:
+        explanation = _fallback_explanation(result)
 
     step_rec = StepResultModel(
         session_id=session_id,
@@ -196,9 +551,12 @@ async def _run_step(session_id, step_name, body, db, fn) -> StepResponse:
     db.add(step_rec)
 
     pipeline_state = dict(session.pipeline_state)
-    pipeline_state[step_name] = {"technique": body.technique, "params": body.params}
+    pipeline_state[step_name] = {
+        "technique": body.technique,
+        "params":    body.params,
+    }
     session.pipeline_state = pipeline_state
-    session.current_step = session.current_step + 1
+    session.current_step   = session.current_step + 1
 
     await db.commit()
 
@@ -212,182 +570,52 @@ async def _run_step(session_id, step_name, body, db, fn) -> StepResponse:
     )
 
 
-def _replay_pipeline(session: MLSession) -> pd.DataFrame:
-    df = load_dataset(session.dataset_id)
-    meta = _load_meta()
-    target = meta[session.dataset_id]["target"]
-    state = session.pipeline_state
+def _fallback_explanation(result: PipelineStepResult) -> str:
+    """Rule-based fallback when LLM is unavailable."""
+    stats = result.stats
+    w     = " ".join(result.warnings) if result.warnings else ""
 
-    step_order = [
-        "missing_values",
-        "outliers",
-        "feature_engineering",
-        "encoding",
-        "feature_selection",
-        "scaling",
-    ]
+    if result.step == "missing_values":
+        before = stats.get("missing_before", 0)
+        after  = stats.get("missing_after", 0)
+        return (
+            f"Applied {result.technique} imputation. "
+            f"Missing values reduced from {before} to {after}. {w}"
+        ).strip()
 
-    for step_name in step_order:
-        if step_name in state:
-            s = state[step_name]
-            df = _transform(df, step_name, s["technique"], s["params"], target)
+    if result.step == "outliers":
+        total      = stats.get("total_outliers_found", 0)
+        rows_after = stats.get("rows_after", "?")
+        return (
+            f"Applied {result.technique}. "
+            f"{total} outliers found. "
+            f"Dataset now has {rows_after} rows. {w}"
+        ).strip()
 
-    return df
+    if result.step == "encoding":
+        cols = stats.get("encoded_columns", [])
+        new  = stats.get("new_cols_created", 0)
+        return (
+            f"Encoded {len(cols)} categorical columns using {result.technique}. "
+            f"{new} new columns created. {w}"
+        ).strip()
 
+    if result.step == "scaling":
+        n = stats.get("n_columns_scaled", 0)
+        return (
+            f"Applied {result.technique} to {n} numeric columns. {w}"
+        ).strip()
 
-def _transform(df: pd.DataFrame, step_name: str, technique: str, params: dict, target: str) -> pd.DataFrame:
-    df = df.copy()
+    if result.step == "feature_engineering":
+        new = stats.get("new_features_created", 0)
+        return (
+            f"Created {new} new features using {result.technique}. {w}"
+        ).strip()
 
-    if step_name == "missing_values":
-        numeric_cols = df.select_dtypes(include="number").columns.tolist()
-        cat_cols = df.select_dtypes(exclude="number").columns.tolist()
+    if result.step == "feature_selection":
+        dropped = stats.get("n_dropped", 0)
+        return (
+            f"Dropped {dropped} features using {result.technique}. {w}"
+        ).strip()
 
-        if technique == "mean":
-            for col in numeric_cols:
-                df[col].fillna(df[col].mean(), inplace=True)
-            for col in cat_cols:
-                df[col].fillna(df[col].mode()[0] if not df[col].mode().empty else "missing", inplace=True)
-        elif technique == "median":
-            for col in numeric_cols:
-                df[col].fillna(df[col].median(), inplace=True)
-            for col in cat_cols:
-                df[col].fillna(df[col].mode()[0] if not df[col].mode().empty else "missing", inplace=True)
-        elif technique == "mode":
-            for col in df.columns:
-                if not df[col].mode().empty:
-                    df[col].fillna(df[col].mode()[0], inplace=True)
-        elif technique == "knn":
-            imp = KNNImputer(n_neighbors=params.get("n_neighbors", 5))
-            df[numeric_cols] = imp.fit_transform(df[numeric_cols])
-            for col in cat_cols:
-                df[col].fillna(df[col].mode()[0] if not df[col].mode().empty else "missing", inplace=True)
-        elif technique == "mice":
-            imp = IterativeImputer(max_iter=10, random_state=42)
-            df[numeric_cols] = imp.fit_transform(df[numeric_cols])
-            for col in cat_cols:
-                df[col].fillna(df[col].mode()[0] if not df[col].mode().empty else "missing", inplace=True)
-        elif technique == "constant":
-            df.fillna(params.get("fill_value", 0), inplace=True)
-        elif technique == "drop_rows":
-            df.dropna(inplace=True)
-        elif technique == "drop_cols":
-            threshold = params.get("threshold", 0.5)
-            cols_to_drop = [c for c in df.columns if df[c].isnull().mean() > threshold]
-            df.drop(columns=cols_to_drop, inplace=True)
-
-    elif step_name == "outliers":
-        numeric_cols = df.select_dtypes(include="number").columns.tolist()
-
-        if technique == "iqr_cap":
-            for col in numeric_cols:
-                Q1, Q3 = df[col].quantile(0.25), df[col].quantile(0.75)
-                IQR = Q3 - Q1
-                df[col] = df[col].clip(lower=Q1 - 1.5 * IQR, upper=Q3 + 1.5 * IQR)
-        elif technique == "zscore_remove":
-            threshold = params.get("threshold", 3.0)
-            mask = pd.Series([True] * len(df), index=df.index)
-            for col in numeric_cols:
-                z = np.abs((df[col] - df[col].mean()) / df[col].std())
-                mask = mask & (z <= threshold)
-            df = df[mask]
-        elif technique == "log_transform":
-            for col in numeric_cols:
-                if (df[col] > 0).all():
-                    df[col] = np.log1p(df[col])
-
-    elif step_name == "feature_engineering":
-        numeric_cols = [c for c in df.select_dtypes(include="number").columns if c != target]
-
-        if technique == "polynomial":
-            cols_to_use = numeric_cols[:5]
-            for i, col1 in enumerate(cols_to_use):
-                for col2 in cols_to_use[i:]:
-                    df[f"{col1}_x_{col2}"] = df[col1] * df[col2]
-        elif technique == "interaction":
-            cols_to_use = numeric_cols[:6]
-            for i in range(len(cols_to_use)):
-                for j in range(i + 1, len(cols_to_use)):
-                    col1, col2 = cols_to_use[i], cols_to_use[j]
-                    df[f"{col1}_times_{col2}"] = df[col1] * df[col2]
-        elif technique == "log_features":
-            for col in numeric_cols:
-                if (df[col] > 0).all():
-                    df[f"log_{col}"] = np.log1p(df[col])
-        elif technique == "ratio":
-            cols_to_use = numeric_cols[:4]
-            for i in range(len(cols_to_use)):
-                for j in range(len(cols_to_use)):
-                    if i != j and (df[cols_to_use[j]] != 0).all():
-                        df[f"{cols_to_use[i]}_div_{cols_to_use[j]}"] = df[cols_to_use[i]] / df[cols_to_use[j]]
-        elif technique == "binning":
-            n_bins = params.get("n_bins", 5)
-            for col in numeric_cols[:5]:
-                df[f"{col}_binned"] = pd.cut(df[col], bins=n_bins, labels=False, duplicates="drop")
-        elif technique == "sqrt_features":
-            for col in numeric_cols:
-                if (df[col] >= 0).all():
-                    df[f"sqrt_{col}"] = np.sqrt(df[col])
-
-    elif step_name == "encoding":
-        cat_cols = [c for c in df.select_dtypes(exclude="number").columns if c != target]
-
-        if technique == "onehot":
-            df = pd.get_dummies(df, columns=cat_cols, drop_first=False)
-        elif technique == "label":
-            for col in cat_cols:
-                le = LabelEncoder()
-                df[col] = le.fit_transform(df[col].astype(str))
-        elif technique == "ordinal":
-            enc = OrdinalEncoder()
-            df[cat_cols] = enc.fit_transform(df[cat_cols].astype(str))
-        elif technique == "frequency":
-            for col in cat_cols:
-                freq_map = df[col].value_counts(normalize=True).to_dict()
-                df[col] = df[col].map(freq_map)
-        elif technique == "target":
-            for col in cat_cols:
-                means = df.groupby(col)[target].mean().to_dict()
-                df[col] = df[col].map(means)
-
-    elif step_name == "feature_selection":
-        X = df.drop(columns=[target]).select_dtypes(include="number")
-        y = df[target]
-
-        if technique == "variance_threshold":
-            from sklearn.feature_selection import VarianceThreshold
-            threshold = params.get("threshold", 0.01)
-            sel = VarianceThreshold(threshold=threshold)
-            sel.fit(X)
-            low_var = X.columns[~sel.get_support()].tolist()
-            df.drop(columns=low_var, inplace=True)
-        elif technique == "correlation":
-            threshold = params.get("threshold", 0.95)
-            corr_matrix = X.corr().abs()
-            upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-            to_drop = [col for col in upper.columns if any(upper[col] > threshold)]
-            df.drop(columns=to_drop, inplace=True)
-        elif technique == "mutual_info":
-            from sklearn.feature_selection import mutual_info_classif, mutual_info_regression, SelectKBest
-            k = params.get("k", min(10, len(X.columns)))
-            score_fn = mutual_info_classif if len(y.unique()) < 20 else mutual_info_regression
-            sel = SelectKBest(score_fn, k=k)
-            sel.fit(X, y)
-            kept = X.columns[sel.get_support()].tolist()
-            non_numeric = [c for c in df.columns if c not in X.columns and c != target]
-            keep_cols = kept + [target] + non_numeric
-            df = df[[c for c in keep_cols if c in df.columns]]
-
-    elif step_name == "scaling":
-        numeric_cols = [c for c in df.select_dtypes(include="number").columns if c != target]
-        scalers = {
-            "standard": StandardScaler(),
-            "minmax":   MinMaxScaler(),
-            "robust":   RobustScaler(),
-            "maxabs":   MaxAbsScaler(),
-            "quantile": QuantileTransformer(output_distribution="uniform", random_state=42),
-            "power":    PowerTransformer(method="yeo-johnson"),
-        }
-        if technique in scalers:
-            df[numeric_cols] = scalers[technique].fit_transform(df[numeric_cols])
-
-    return df
+    return f"Applied {result.technique} to step '{result.step}'. {w}".strip()
