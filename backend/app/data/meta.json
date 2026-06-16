@@ -1,0 +1,37 @@
+{
+  "titanic": {
+    "name": "Titanic Survival",
+    "target": "Survived",
+    "task": "classification",
+    "rows": 891,
+    "cols": 12
+  },
+  "iris": {
+    "name": "Iris Species",
+    "target": "species",
+    "task": "classification",
+    "rows": 150,
+    "cols": 5
+  },
+  "wine": {
+    "name": "Wine Quality",
+    "target": "quality",
+    "task": "regression",
+    "rows": 1599,
+    "cols": 12
+  },
+  "heart": {
+    "name": "Heart Disease",
+    "target": "target",
+    "task": "classification",
+    "rows": 303,
+    "cols": 14
+  },
+  "house": {
+    "name": "House Prices",
+    "target": "medv",
+    "task": "regression",
+    "rows": 506,
+    "cols": 14
+  }
+}
