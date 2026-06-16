@@ -108,7 +108,7 @@ def handle_outliers(df: pd.DataFrame, technique: str, params: dict) -> PipelineS
 
     elif technique == "zscore_remove":
         threshold = params.get("threshold", 3.0)
-        mask = pd.Series([True] * len(df_out))
+        mask = pd.Series([True] * len(df_out), index=df_out.index)
         for col in numeric_cols:
             z = np.abs((df_out[col] - df_out[col].mean()) / df_out[col].std())
             mask = mask & (z <= threshold)
@@ -138,6 +138,154 @@ def handle_outliers(df: pd.DataFrame, technique: str, params: dict) -> PipelineS
             "rows_after": len(df_out),
             "total_outliers_found": total_outliers,
             "per_column": outlier_counts,
+        },
+        warnings=warnings,
+    )
+
+
+# ─── FEATURE ENGINEERING ──────────────────────────────────────────────────────
+
+def handle_feature_engineering(df: pd.DataFrame, technique: str, params: dict, target_col: str) -> PipelineStepResult:
+    df_out = df.copy()
+    warnings = []
+    cols_before = len(df_out.columns)
+    numeric_cols = [c for c in df_out.select_dtypes(include="number").columns if c != target_col]
+    new_features = []
+
+    if technique == "polynomial":
+        cols_to_use = numeric_cols[:5]
+        for i, col1 in enumerate(cols_to_use):
+            for col2 in cols_to_use[i:]:
+                new_col = f"{col1}_x_{col2}"
+                df_out[new_col] = df_out[col1] * df_out[col2]
+                new_features.append(new_col)
+        if len(numeric_cols) > 5:
+            warnings.append("Polynomial features limited to first 5 numeric columns to avoid feature explosion.")
+
+    elif technique == "interaction":
+        cols_to_use = numeric_cols[:6]
+        for i in range(len(cols_to_use)):
+            for j in range(i + 1, len(cols_to_use)):
+                col1, col2 = cols_to_use[i], cols_to_use[j]
+                new_col = f"{col1}_times_{col2}"
+                df_out[new_col] = df_out[col1] * df_out[col2]
+                new_features.append(new_col)
+
+    elif technique == "log_features":
+        for col in numeric_cols:
+            if (df_out[col] > 0).all():
+                new_col = f"log_{col}"
+                df_out[new_col] = np.log1p(df_out[col])
+                new_features.append(new_col)
+            else:
+                warnings.append(f"Skipped log on '{col}' — contains non-positive values.")
+
+    elif technique == "ratio":
+        cols_to_use = numeric_cols[:4]
+        for i in range(len(cols_to_use)):
+            for j in range(len(cols_to_use)):
+                if i != j:
+                    col1, col2 = cols_to_use[i], cols_to_use[j]
+                    if (df_out[col2] != 0).all():
+                        new_col = f"{col1}_div_{col2}"
+                        df_out[new_col] = df_out[col1] / df_out[col2]
+                        new_features.append(new_col)
+
+    elif technique == "binning":
+        n_bins = params.get("n_bins", 5)
+        for col in numeric_cols[:5]:
+            new_col = f"{col}_binned"
+            df_out[new_col] = pd.cut(df_out[col], bins=n_bins, labels=False, duplicates="drop")
+            new_features.append(new_col)
+
+    elif technique == "sqrt_features":
+        for col in numeric_cols:
+            if (df_out[col] >= 0).all():
+                new_col = f"sqrt_{col}"
+                df_out[new_col] = np.sqrt(df_out[col])
+                new_features.append(new_col)
+
+    elif technique == "none":
+        warnings.append("No feature engineering applied. Moving to next step.")
+
+    return PipelineStepResult(
+        step="feature_engineering",
+        technique=technique,
+        params=params,
+        stats={
+            "cols_before": cols_before,
+            "cols_after": len(df_out.columns),
+            "new_features_created": len(new_features),
+            "new_feature_names": new_features[:10],
+        },
+        warnings=warnings,
+    )
+
+
+# ─── FEATURE SELECTION ────────────────────────────────────────────────────────
+
+def handle_feature_selection(df: pd.DataFrame, technique: str, params: dict, target_col: str) -> PipelineStepResult:
+    df_out = df.copy()
+    warnings = []
+    cols_before = len(df_out.columns)
+    dropped = []
+
+    if target_col not in df_out.columns:
+        warnings.append("Target column not found. Feature selection skipped.")
+        return PipelineStepResult(
+            step="feature_selection", technique=technique, params=params,
+            stats={"cols_before": cols_before, "cols_after": cols_before, "dropped_columns": []},
+            warnings=warnings,
+        )
+
+    X = df_out.drop(columns=[target_col]).select_dtypes(include="number")
+    y = df_out[target_col]
+
+    if technique == "variance_threshold":
+        from sklearn.feature_selection import VarianceThreshold
+        threshold = params.get("threshold", 0.01)
+        sel = VarianceThreshold(threshold=threshold)
+        sel.fit(X)
+        low_var = X.columns[~sel.get_support()].tolist()
+        df_out.drop(columns=low_var, inplace=True)
+        dropped = low_var
+        if not dropped:
+            warnings.append("No low-variance features found. Nothing dropped.")
+
+    elif technique == "correlation":
+        threshold = params.get("threshold", 0.95)
+        corr_matrix = X.corr().abs()
+        upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+        to_drop = [col for col in upper.columns if any(upper[col] > threshold)]
+        df_out.drop(columns=to_drop, inplace=True)
+        dropped = to_drop
+        if not dropped:
+            warnings.append(f"No features with correlation > {threshold} found.")
+
+    elif technique == "mutual_info":
+        from sklearn.feature_selection import mutual_info_classif, mutual_info_regression, SelectKBest
+        k = params.get("k", min(10, len(X.columns)))
+        score_fn = mutual_info_classif if len(y.unique()) < 20 else mutual_info_regression
+        sel = SelectKBest(score_fn, k=k)
+        sel.fit(X, y)
+        kept = X.columns[sel.get_support()].tolist()
+        dropped = [c for c in X.columns if c not in kept]
+        non_numeric = [c for c in df_out.columns if c not in X.columns and c != target_col]
+        keep_cols = kept + [target_col] + non_numeric
+        df_out = df_out[[c for c in keep_cols if c in df_out.columns]]
+
+    elif technique == "none":
+        warnings.append("No feature selection applied. All features kept.")
+
+    return PipelineStepResult(
+        step="feature_selection",
+        technique=technique,
+        params=params,
+        stats={
+            "cols_before": cols_before,
+            "cols_after": len(df_out.columns),
+            "dropped_columns": dropped,
+            "n_dropped": len(dropped),
         },
         warnings=warnings,
     )
@@ -186,7 +334,7 @@ def handle_encoding(df: pd.DataFrame, technique: str, params: dict, target_col: 
             for col in cat_cols:
                 means = df_out.groupby(col)[target_col].mean().to_dict()
                 df_out[col] = df_out[col].map(means)
-            warnings.append("Target encoding uses full dataset means — ensure this is applied correctly on train set only in production.")
+            warnings.append("Target encoding uses full dataset means — use train set only in production.")
 
     return PipelineStepResult(
         step="encoding",
@@ -218,12 +366,12 @@ def handle_scaling(df: pd.DataFrame, technique: str, params: dict, target_col: s
         )
 
     scalers = {
-        "standard":  StandardScaler(),
-        "minmax":    MinMaxScaler(),
-        "robust":    RobustScaler(),
-        "maxabs":    MaxAbsScaler(),
-        "quantile":  QuantileTransformer(output_distribution="uniform", random_state=42),
-        "power":     PowerTransformer(method="yeo-johnson"),
+        "standard": StandardScaler(),
+        "minmax":   MinMaxScaler(),
+        "robust":   RobustScaler(),
+        "maxabs":   MaxAbsScaler(),
+        "quantile": QuantileTransformer(output_distribution="uniform", random_state=42),
+        "power":    PowerTransformer(method="yeo-johnson"),
     }
 
     if technique not in scalers:

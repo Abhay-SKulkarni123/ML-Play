@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import datasets, sessions
+from app.routers import datasets, sessions, eda
 
 app = FastAPI(
     title="ML Playground",
@@ -18,7 +18,7 @@ app.add_middleware(
 
 app.include_router(datasets.router)
 app.include_router(sessions.router)
-
+app.include_router(eda.router)
 
 @app.get("/health")
 async def health():
