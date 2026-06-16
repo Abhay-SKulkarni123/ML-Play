@@ -43,29 +43,94 @@ Explain what happened and why, referencing the specific numbers above. \
 Do not repeat the technique name as a definition."""
 
 
-async def get_explanation(result: PipelineStepResult, dataset_name: str) -> str:
+async def get_explanation(result: PipelineStepResult, dataset_name: str) -> tuple[str, str]:
     """
-    Get AI explanation for a preprocessing step result.
-    Tries configured LLM provider first, falls back to rule-based explanation.
-    Never raises — always returns a string.
+    Returns (explanation, recommendation) — both grounded in real stats.
+    Never raises — always returns strings.
     """
     prompt = build_prompt(result, dataset_name)
+    rec_prompt = _build_recommendation_prompt(result, dataset_name)
 
-    # Try LLM if key is configured
+    explanation = ""
+    recommendation = ""
+
     if settings.LLM_PROVIDER == "anthropic" and settings.ANTHROPIC_API_KEY:
         try:
-            return await _call_anthropic(prompt)
+            explanation = await _call_anthropic(prompt)
+            recommendation = await _call_anthropic(rec_prompt)
         except Exception as e:
-            # Log but don't crash — fall through to fallback
             print(f"[AI] Anthropic call failed: {e}. Using fallback.")
-
+            explanation = _rule_based_explanation(result)
+            recommendation = _rule_based_recommendation(result)
     elif settings.LLM_PROVIDER == "openai" and settings.OPENAI_API_KEY:
         try:
-            return await _call_openai(prompt)
+            explanation = await _call_openai(prompt)
+            recommendation = await _call_openai(rec_prompt)
         except Exception as e:
             print(f"[AI] OpenAI call failed: {e}. Using fallback.")
+            explanation = _rule_based_explanation(result)
+            recommendation = _rule_based_recommendation(result)
+    else:
+        explanation = _rule_based_explanation(result)
+        recommendation = _rule_based_recommendation(result)
 
-    return _rule_based_explanation(result)
+    return explanation, recommendation
+
+
+def _build_recommendation_prompt(result: PipelineStepResult, dataset_name: str) -> str:
+    return f"""You are an ML teaching assistant. A student just applied a technique to the {dataset_name} dataset.
+
+Step: {result.step}
+Technique used: {result.technique}
+Stats: {json.dumps(result.stats, indent=2)}
+Warnings: {result.warnings if result.warnings else "none"}
+
+Give ONE specific, actionable recommendation for what they should do next or watch out for.
+2-3 sentences maximum. Be specific to this data, not generic advice.
+Start with "Consider" or "Watch out for" or "Next,"."""
+
+
+def _rule_based_recommendation(result: PipelineStepResult) -> str:
+    stats = result.stats
+
+    if result.step == "missing_values":
+        after = stats.get("missing_after", 0)
+        if after > 0:
+            return f"Watch out for — {after} missing values remain. Check if any columns still have nulls before proceeding to outlier treatment."
+        return "Consider — checking for outliers next, as imputation can sometimes shift the distribution of numeric columns."
+
+    if result.step == "outliers":
+        total = stats.get("total_outliers_found", 0)
+        if total > 50:
+            return f"Watch out for — {total} outliers were found. If using a linear model, scaling after this step becomes especially important."
+        return "Consider — using RobustScaler in the scaling step, as it is designed for datasets with outliers."
+
+    if result.step == "feature_engineering":
+        new = stats.get("new_features_created", 0)
+        if new > 10:
+            return f"Watch out for — {new} new features were created. Run feature selection next to remove low-value ones and prevent the curse of dimensionality."
+        return "Consider — running feature selection after encoding to identify which engineered features actually help the model."
+
+    if result.step == "encoding":
+        new_cols = stats.get("new_cols_created", 0)
+        if new_cols > 20:
+            return f"Watch out for — one-hot encoding created {new_cols} new columns. High cardinality encoding can slow training and cause overfitting. Consider feature selection next."
+        return "Consider — if using linear models next, StandardScaler after encoding will improve convergence significantly."
+
+    if result.step == "feature_selection":
+        dropped = stats.get("n_dropped", 0)
+        if dropped == 0:
+            return "Consider — lowering the threshold if you want to be more aggressive in removing features."
+        return f"Next, apply scaling before training. {dropped} features were removed, which should reduce overfitting risk."
+
+    if result.step == "scaling":
+        return "Consider — tree-based models like Random Forest and XGBoost do not require scaling. If you are using those, scaling has no effect on accuracy."
+
+    if result.step == "pca":
+        comp = stats.get("components", 0)
+        return f"Next, proceed to scaling before training. PCA reduced dimensions to {comp} components — try Random Forest or Logistic Regression to see how the reduced features perform."
+
+    return "Consider — reviewing the statistics above before moving to the next step."
 
 
 async def _call_anthropic(prompt: str) -> str:

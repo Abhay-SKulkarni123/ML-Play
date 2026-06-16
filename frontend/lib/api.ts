@@ -58,6 +58,7 @@ export interface DatasetProfile {
 }
 
 export interface StepResponse {
+  ai_recommendation: import("react").JSX.Element;
   step: string;
   technique: string;
   params: Record<string, any>;
@@ -200,8 +201,31 @@ export const runAutoML = (formData: FormData) =>
       job_id: string;
       status: string;
       columns: string[];
-    }>("/automl/run", formData, { headers: { "Content-Type": "multipart/form-data" } })
+    }>("/automl/run", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    })
     .then((r) => r.data);
 
 export const getAutoMLStatus = (jobId: string) =>
   api.get<AutoMLStatus>(`/automl/status/${jobId}`).then((r) => r.data);
+
+export const gridSearch = (sessionId: string, test_size = 0.2) =>
+  api
+    .post<TrainResponse>(`/sessions/${sessionId}/gridsearch`, {
+      model_name: "random_forest",
+      params: {},
+      test_size,
+    })
+    .then((r) => r.data);
+
+export const uploadDataset = (formData: FormData) =>
+  api
+    .post<{
+      dataset_id: string;
+      name: string;
+      target: string;
+      task: string;
+      rows: number;
+      cols: number;
+    }>("/datasets/upload", formData, { headers: { "Content-Type": "multipart/form-data" } })
+    .then((r) => r.data);

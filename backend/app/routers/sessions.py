@@ -138,6 +138,15 @@ async def step_scaling(
         lambda df, t, p, m: preprocessing.handle_scaling(df, t, p, m["target"]),
     )
 
+@router.post("/{session_id}/steps/pca", response_model=StepResponse)
+async def step_pca(
+    session_id: uuid.UUID, body: StepRequest, db: AsyncSession = Depends(get_db)
+):
+    return await _run_step(
+        session_id, "pca", body, db,
+        lambda df, t, p, m: preprocessing.handle_pca(df, t, p, m["target"]),
+    )
+
 
 # ─── TRAIN ENDPOINT ───────────────────────────────────────────────────────────
 
@@ -233,40 +242,31 @@ async def tune(
     import optuna
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     from sklearn.model_selection import cross_val_score, StratifiedKFold, KFold
-    from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-    from xgboost import XGBClassifier, XGBRegressor
 
     session = await _get_session_or_404(session_id, db)
     meta = _load_meta()
     dataset_meta = meta[session.dataset_id]
     target_col = dataset_meta["target"]
     task = session.task_type
-
-    # Only tune supported models — fall back to random_forest for others
-    tune_model = body.model_name if body.model_name in TUNABLE_MODELS else "random_forest"
+    model_name = body.model_name
 
     df = load_dataset(session.dataset_id)
 
-    # Build split-aware training data for the search
     from app.services.ml.training import _apply_pipeline_split_aware
     from sklearn.model_selection import train_test_split
 
     X_raw = df.drop(columns=[target_col])
-    y     = df[target_col]
-
+    y = df[target_col]
     stratify = y if task == "classification" else None
     X_train_raw, X_test_raw, y_train, y_test = train_test_split(
         X_raw, y, test_size=body.test_size, random_state=42, stratify=stratify
     )
-
     X_train, _ = _apply_pipeline_split_aware(
-        X_train_raw.copy(),
-        X_test_raw.copy(),
-        y_train,
-        dict(session.pipeline_state),
-        target_col,
+        X_train_raw.copy(), X_test_raw.copy(), y_train,
+        dict(session.pipeline_state), target_col,
     )
     X_train = X_train.select_dtypes(include="number")
+    y_train_aligned = y_train.loc[X_train.index] if hasattr(y_train, 'loc') else y_train
 
     cv = (
         StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
@@ -275,38 +275,102 @@ async def tune(
     )
     scoring = "f1_weighted" if task == "classification" else "r2"
 
-    def objective(trial: "optuna.Trial") -> float:
-        if tune_model == "random_forest":
-            params = {
+    # ── Search spaces per model ───────────────────────────────────────────────
+    def get_model(trial, name: str):
+        from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingClassifier
+        from sklearn.linear_model import LogisticRegression, Ridge, Lasso
+        from sklearn.tree import DecisionTreeClassifier
+        from sklearn.neighbors import KNeighborsClassifier
+        from xgboost import XGBClassifier, XGBRegressor
+        from lightgbm import LGBMClassifier, LGBMRegressor
+
+        if name == "random_forest":
+            p = {
                 "n_estimators":      trial.suggest_int("n_estimators", 50, 300),
                 "max_depth":         trial.suggest_int("max_depth", 2, 20),
                 "min_samples_split": trial.suggest_int("min_samples_split", 2, 10),
+                "random_state": 42,
             }
-            model = (
-                RandomForestClassifier(**params, random_state=42)
-                if task == "classification"
-                else RandomForestRegressor(**params, random_state=42)
-            )
-        else:  # xgboost
-            params = {
+            return RandomForestClassifier(**p) if task == "classification" else RandomForestRegressor(**p)
+
+        elif name == "xgboost":
+            p = {
                 "n_estimators":  trial.suggest_int("n_estimators", 50, 300),
                 "max_depth":     trial.suggest_int("max_depth", 2, 12),
                 "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3),
+                "subsample":     trial.suggest_float("subsample", 0.6, 1.0),
+                "random_state": 42, "verbosity": 0,
             }
-            model = (
-                XGBClassifier(
-                    **params, random_state=42,
-                    verbosity=0, eval_metric="logloss",
-                )
-                if task == "classification"
-                else XGBRegressor(**params, random_state=42, verbosity=0)
-            )
+            if task == "classification":
+                return XGBClassifier(**p, eval_metric="logloss")
+            return XGBRegressor(**p)
 
-        scores = cross_val_score(model, X_train, y_train, cv=cv, scoring=scoring)
+        elif name == "lightgbm":
+            p = {
+                "n_estimators":  trial.suggest_int("n_estimators", 50, 300),
+                "max_depth":     trial.suggest_int("max_depth", 2, 12),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3),
+                "num_leaves":    trial.suggest_int("num_leaves", 20, 100),
+                "random_state": 42, "verbose": -1,
+            }
+            return LGBMClassifier(**p) if task == "classification" else LGBMRegressor(**p)
+
+        elif name == "logistic_regression":
+            p = {
+                "C":        trial.suggest_float("C", 0.01, 10.0, log=True),
+                "max_iter": trial.suggest_int("max_iter", 100, 1000),
+            }
+            return LogisticRegression(**p)
+
+        elif name == "decision_tree":
+            p = {
+                "max_depth":         trial.suggest_int("max_depth", 1, 20),
+                "min_samples_split": trial.suggest_int("min_samples_split", 2, 20),
+                "min_samples_leaf":  trial.suggest_int("min_samples_leaf", 1, 10),
+                "random_state": 42,
+            }
+            return DecisionTreeClassifier(**p)
+
+        elif name == "knn":
+            p = {
+                "n_neighbors": trial.suggest_int("n_neighbors", 1, 30),
+                "weights":     trial.suggest_categorical("weights", ["uniform", "distance"]),
+                "p":           trial.suggest_int("p", 1, 2),
+            }
+            return KNeighborsClassifier(**p)
+
+        elif name == "gradient_boosting":
+            p = {
+                "n_estimators":  trial.suggest_int("n_estimators", 50, 200),
+                "max_depth":     trial.suggest_int("max_depth", 2, 8),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3),
+                "random_state": 42,
+            }
+            return GradientBoostingClassifier(**p)
+
+        elif name == "ridge":
+            p = {"alpha": trial.suggest_float("alpha", 0.01, 100.0, log=True)}
+            return Ridge(**p)
+
+        elif name == "lasso":
+            p = {"alpha": trial.suggest_float("alpha", 0.01, 10.0, log=True)}
+            return Lasso(**p)
+
+        else:
+            # Fallback to random forest
+            p = {
+                "n_estimators": trial.suggest_int("n_estimators", 50, 200),
+                "max_depth":    trial.suggest_int("max_depth", 2, 15),
+                "random_state": 42,
+            }
+            return RandomForestClassifier(**p) if task == "classification" else RandomForestRegressor(**p)
+
+    def objective(trial) -> float:
+        model = get_model(trial, model_name)
+        scores = cross_val_score(model, X_train, y_train_aligned, cv=cv, scoring=scoring)
         return float(scores.mean())
 
     loop = asyncio.get_event_loop()
-
     try:
         def _run_study():
             study = optuna.create_study(direction="maximize")
@@ -318,65 +382,43 @@ async def tune(
             timeout=90,
         )
     except asyncio.TimeoutError:
-        raise HTTPException(
-            status_code=408,
-            detail="Hyperparameter search timed out after 90s.",
-        )
+        raise HTTPException(status_code=408, detail="Hyperparameter search timed out after 90s.")
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Tuning failed: {str(e)}",
-        )
+        raise HTTPException(status_code=500, detail=f"Tuning failed: {str(e)}")
 
     best_params = study.best_params
     trials_data = [
-        {
-            "number": t.number,
-            "value":  round(t.value, 4),
-            "params": t.params,
-        }
-        for t in study.trials
-        if t.value is not None
+        {"number": t.number, "value": round(t.value, 4), "params": t.params}
+        for t in study.trials if t.value is not None
     ]
 
-    # Train final model using best params — use the same model that was tuned
     try:
         result = await asyncio.wait_for(
             loop.run_in_executor(
                 _ml_executor,
                 lambda: train_model(
-                    df,
-                    target_col,
-                    task,
-                    tune_model,           # must match the tuned model
-                    best_params,
-                    body.test_size,
+                    df, target_col, task, model_name,
+                    best_params, body.test_size,
                     pipeline_state=dict(session.pipeline_state),
                 ),
             ),
             timeout=MAX_TRAINING_SECONDS,
         )
     except asyncio.TimeoutError:
-        raise HTTPException(
-            status_code=408,
-            detail=f"Final training timed out after {MAX_TRAINING_SECONDS}s.",
-        )
+        raise HTTPException(status_code=408, detail=f"Final training timed out.")
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Final training with best params failed: {str(e)}",
-        )
+        raise HTTPException(status_code=500, detail=f"Final training failed: {str(e)}")
 
     final_metrics = {
         **result["metrics"],
         "best_trial_score": round(study.best_value, 4),
-        "n_trials":         len(study.trials),
-        "trials":           trials_data,
+        "n_trials": len(study.trials),
+        "trials": trials_data,
     }
 
     run = TrainingRun(
         session_id=session_id,
-        model_name=tune_model,
+        model_name=model_name,
         params=best_params,
         metrics=final_metrics,
         feature_importance=result["feature_importance"],
@@ -388,7 +430,7 @@ async def tune(
 
     return TrainResponse(
         run_id=run.id,
-        model=tune_model,
+        model=model_name,
         metrics=final_metrics,
         feature_importance=result["feature_importance"],
         train_size=result["train_size"],
@@ -534,9 +576,10 @@ async def _run_step(
 
     # AI explanation — non-blocking, falls back gracefully
     try:
-        explanation = await get_explanation(result, dataset_meta["name"])
+        explanation, recommendation = await get_explanation(result, dataset_meta["name"])
     except Exception:
         explanation = _fallback_explanation(result)
+        recommendation = ""
 
     step_rec = StepResultModel(
         session_id=session_id,
@@ -567,6 +610,7 @@ async def _run_step(
         stats=result.stats,
         warnings=result.warnings,
         ai_explanation=explanation,
+        ai_recommendation=recommendation,
     )
 
 

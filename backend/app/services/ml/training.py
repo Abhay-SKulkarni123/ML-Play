@@ -37,6 +37,8 @@ def _build_classifier(name: str, params: dict):
         "gradient_boosting": {"random_state": 42},
         "knn":               {},
         "naive_bayes":       {},
+        "adaboost":    {"n_estimators": 50, "random_state": 42},
+        "catboost":    {"verbose": 0, "random_state": 42},
     }
     # User/Optuna params override defaults — no conflicts
     merged = {**defaults.get(name, {}), **params}
@@ -83,6 +85,9 @@ def _build_regressor(name: str, params: dict):
         "lightgbm":      lambda p: LGBMRegressor(**p),
         "svr":           lambda p: SVR(**p),
         "knn":           lambda p: KNeighborsRegressor(**p),
+        "adaboost":    lambda p: __import__('sklearn.ensemble', fromlist=['AdaBoostClassifier']).AdaBoostClassifier(**p),
+        "catboost":    lambda p: __import__('catboost', fromlist=['CatBoostClassifier']).CatBoostClassifier(**p),
+
     }
     if name not in constructors:
         raise ValueError(f"Unknown regressor: {name}")

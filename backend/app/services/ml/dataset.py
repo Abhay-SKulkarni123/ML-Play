@@ -25,11 +25,13 @@ def get_all_datasets() -> list[dict]:
 
 
 def load_dataset(dataset_id: str) -> pd.DataFrame:
+    # Check main data dir first, then uploads
     path = DATA_DIR / f"{dataset_id}.parquet"
     if not path.exists():
-        raise FileNotFoundError(f"Dataset '{dataset_id}' not found at {path}")
-    df = pd.read_parquet(path)
-    return df
+        path = DATA_DIR / "uploads" / f"{dataset_id}.parquet"
+    if not path.exists():
+        raise FileNotFoundError(f"Dataset '{dataset_id}' not found.")
+    return pd.read_parquet(path)
 
 
 def profile_dataset(dataset_id: str) -> dict:

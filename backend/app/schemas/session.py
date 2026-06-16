@@ -28,10 +28,11 @@ class StepRequest(BaseModel):
 class StepResponse(BaseModel):
     step: str
     technique: str
-    params: dict
-    stats: dict
-    warnings: list[str]
-    ai_explanation: str
+    params: dict = {}
+    stats: dict = {}
+    warnings: list[str] = []
+    ai_explanation: str = ""
+    ai_recommendation: str = ""
     metrics_delta: dict = {}
 
 
