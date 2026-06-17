@@ -160,17 +160,44 @@ async def train(
     meta = _load_meta()
     dataset_meta = meta[session.dataset_id]
     target_col = dataset_meta["target"]
+    task = session.task_type
 
+    # Load dataset FIRST — before any validation that references df
     try:
         df = load_dataset(session.dataset_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Dataset file not found.")
 
+    # Now validate
     if len(df) > MAX_DATASET_ROWS:
         raise HTTPException(
             status_code=400,
             detail=f"Dataset has {len(df)} rows. Maximum allowed: {MAX_DATASET_ROWS}.",
         )
+
+    if target_col not in df.columns:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Target column '{target_col}' not found in dataset.",
+        )
+
+    if task == "classification":
+        class_counts = df[target_col].value_counts()
+        if len(class_counts) < 2:
+            raise HTTPException(
+                status_code=400,
+                detail="Classification requires at least 2 classes in the target column.",
+            )
+        min_class_size = int(class_counts.min())
+        if min_class_size < 2:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Smallest class has only {min_class_size} sample(s). "
+                    "Need at least 2 per class for cross-validation. "
+                    "Try using drop_rows less aggressively or choose a different dataset."
+                ),
+            )
 
     loop = asyncio.get_event_loop()
     try:
@@ -229,7 +256,6 @@ async def train(
         test_size=result["test_size"],
         n_features=result["n_features"],
     )
-
 
 # ─── TUNE ENDPOINT ────────────────────────────────────────────────────────────
 
@@ -544,6 +570,12 @@ async def _run_step(
         df = load_dataset(session.dataset_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Dataset not found.")
+
+    # Validate dataset is usable
+    if df is None or len(df) == 0:
+        raise HTTPException(status_code=400, detail="Dataset is empty.")
+    if len(df.columns) == 0:
+        raise HTTPException(status_code=400, detail="Dataset has no columns.")
 
     loop = asyncio.get_event_loop()
     try:

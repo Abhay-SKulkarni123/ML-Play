@@ -370,7 +370,15 @@ def handle_feature_selection(
 
     elif technique == "mutual_info":
         from sklearn.feature_selection import mutual_info_classif, mutual_info_regression, SelectKBest
-        k = min(params.get("k", 10), len(X.columns))
+        available = len(X.columns)
+        if available == 0:
+            warnings.append("No numeric columns available for feature selection.")
+            return PipelineStepResult(
+                step="feature_selection", technique=technique, params=params,
+                stats={"cols_before": cols_before, "cols_after": cols_before, "dropped_columns": [], "n_dropped": 0},
+                warnings=warnings,
+            )
+        k = min(params.get("k", 10), available)
         score_fn = mutual_info_classif if len(y.unique()) < 20 else mutual_info_regression
         sel = SelectKBest(score_fn, k=k)
         sel.fit(X, y)
@@ -474,6 +482,14 @@ def handle_scaling(
     df_out = df.copy()
     warnings = []
     numeric_cols = [c for c in df_out.select_dtypes(include="number").columns if c != target_col]
+
+    if len(numeric_cols) == 0 and technique != "none":
+        warnings.append("No numeric columns found to scale. Encoding may have removed all numeric features.")
+        return PipelineStepResult(
+            step="scaling", technique=technique, params=params,
+            stats={"scaled_columns": [], "n_columns_scaled": 0},
+            warnings=warnings,
+        )
 
     if technique == "none":
         warnings.append("No scaling applied. Correct for tree-based models which are scale-invariant.")

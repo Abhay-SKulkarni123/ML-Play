@@ -6,6 +6,7 @@ import {
     getRuns, runStep, trainModel, tuneModel, gridSearch,
     Session, DatasetProfile, StepResponse, TrainResponse,
     EDADistributions, EDACorrelation, EDATargetAnalysis, RunRecord,
+    getDatasets,
 } from "@/lib/api";
 import {
     BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
@@ -188,47 +189,76 @@ interface ParamDef {
 
 const MODEL_PARAMS: Record<string, ParamDef[]> = {
     random_forest: [
-        { key: "n_estimators", label: "Number of Trees", type: "int", min: 10, max: 500, step: 10, default: 100, effect: "More trees → more stable, slower training" },
-        { key: "max_depth", label: "Max Depth", type: "int", min: 1, max: 30, step: 1, default: 10, effect: "Deeper → more complex, higher overfitting risk" },
-        { key: "min_samples_split", label: "Min Samples to Split", type: "int", min: 2, max: 20, step: 1, default: 2, effect: "Higher → simpler tree, more regularisation" },
+        { key: "n_estimators", label: "Number of Trees", type: "int", min: 10, max: 500, step: 10, default: 100, effect: "More trees → more stable predictions, slower training" },
+        { key: "max_depth", label: "Max Tree Depth", type: "int", min: 1, max: 30, step: 1, default: 10, effect: "Deeper → captures more patterns, higher overfitting risk" },
+        { key: "min_samples_split", label: "Min Samples to Split", type: "int", min: 2, max: 20, step: 1, default: 2, effect: "Higher → simpler trees, better generalisation" },
+        { key: "min_samples_leaf", label: "Min Samples at Leaf", type: "int", min: 1, max: 20, step: 1, default: 1, effect: "Higher → smoother predictions, less variance" },
+        { key: "max_features", label: "Features per Split", type: "select", default: "sqrt", options: ["sqrt", "log2", "auto"], effect: "sqrt is default for classification trees" },
     ],
     xgboost: [
-        { key: "n_estimators", label: "Boosting Rounds", type: "int", min: 10, max: 500, step: 10, default: 100, effect: "More rounds → lower bias, higher overfitting risk" },
-        { key: "max_depth", label: "Max Depth", type: "int", min: 1, max: 15, step: 1, default: 6, effect: "Deeper → captures more patterns, risks overfitting" },
-        { key: "learning_rate", label: "Learning Rate", type: "float", min: 0.01, max: 0.5, step: 0.01, default: 0.1, effect: "Lower → more robust, needs more rounds" },
-        { key: "subsample", label: "Subsample Ratio", type: "float", min: 0.5, max: 1.0, step: 0.05, default: 1.0, effect: "Lower → reduces overfitting, adds randomness" },
+        { key: "n_estimators", label: "Boosting Rounds", type: "int", min: 10, max: 500, step: 10, default: 100, effect: "More rounds → lower bias, risk of overfitting" },
+        { key: "max_depth", label: "Max Tree Depth", type: "int", min: 1, max: 15, step: 1, default: 6, effect: "Shallower trees generalise better with boosting" },
+        { key: "learning_rate", label: "Learning Rate (eta)", type: "float", min: 0.01, max: 0.5, step: 0.01, default: 0.1, effect: "Lower → needs more rounds but generalises better" },
+        { key: "subsample", label: "Row Subsample Ratio", type: "float", min: 0.5, max: 1.0, step: 0.05, default: 1.0, effect: "Lower → reduces overfitting through randomness" },
+        { key: "colsample_bytree", label: "Column Sample Ratio", type: "float", min: 0.3, max: 1.0, step: 0.05, default: 1.0, effect: "Lower → feature randomisation, reduces overfitting" },
+        { key: "reg_lambda", label: "L2 Regularisation", type: "float", min: 0.0, max: 10.0, step: 0.1, default: 1.0, effect: "Higher → stronger regularisation, simpler model" },
     ],
     lightgbm: [
-        { key: "n_estimators", label: "Boosting Rounds", type: "int", min: 10, max: 500, step: 10, default: 100, effect: "More rounds → lower bias, potential overfitting" },
-        { key: "learning_rate", label: "Learning Rate", type: "float", min: 0.01, max: 0.5, step: 0.01, default: 0.1, effect: "Lower → slower but more generalised learning" },
-        { key: "num_leaves", label: "Number of Leaves", type: "int", min: 10, max: 200, step: 5, default: 31, effect: "More leaves → more complex model, overfitting risk" },
+        { key: "n_estimators", label: "Boosting Rounds", type: "int", min: 10, max: 500, step: 10, default: 100, effect: "More rounds → better fit, potential overfitting" },
+        { key: "learning_rate", label: "Learning Rate", type: "float", min: 0.01, max: 0.5, step: 0.01, default: 0.1, effect: "Lower → slower but more generalised" },
+        { key: "num_leaves", label: "Max Leaves", type: "int", min: 10, max: 200, step: 5, default: 31, effect: "More leaves → more complex model" },
+        { key: "min_child_samples", label: "Min Samples per Leaf", type: "int", min: 1, max: 50, step: 1, default: 20, effect: "Higher → prevents overfitting on small datasets" },
+        { key: "reg_alpha", label: "L1 Regularisation", type: "float", min: 0.0, max: 5.0, step: 0.1, default: 0.0, effect: "Higher → sparsity in feature weights" },
+    ],
+    catboost: [
+        { key: "iterations", label: "Iterations", type: "int", min: 10, max: 500, step: 10, default: 100, effect: "More iterations → better fit" },
+        { key: "learning_rate", label: "Learning Rate", type: "float", min: 0.01, max: 0.5, step: 0.01, default: 0.1, effect: "Lower → more robust learning" },
+        { key: "depth", label: "Tree Depth", type: "int", min: 1, max: 10, step: 1, default: 6, effect: "Deeper → more complex, slower" },
+        { key: "l2_leaf_reg", label: "L2 Regularisation", type: "float", min: 0.0, max: 10.0, step: 0.5, default: 3.0, effect: "Higher → prevents overfitting" },
+    ],
+    adaboost: [
+        { key: "n_estimators", label: "Estimators", type: "int", min: 10, max: 300, step: 10, default: 50, effect: "More estimators → better accuracy, slower" },
+        { key: "learning_rate", label: "Learning Rate", type: "float", min: 0.01, max: 2.0, step: 0.01, default: 1.0, effect: "Lower → requires more estimators to converge" },
     ],
     logistic_regression: [
-        { key: "C", label: "Regularisation (C)", type: "float", min: 0.01, max: 10.0, step: 0.1, default: 1.0, effect: "Lower C → stronger regularisation, simpler model" },
-        { key: "max_iter", label: "Max Iterations", type: "int", min: 100, max: 2000, step: 100, default: 1000, effect: "Higher → more training iterations, slower convergence" },
+        { key: "C", label: "Inverse Regularisation (C)", type: "float", min: 0.001, max: 100.0, step: 0.1, default: 1.0, effect: "Lower C → stronger regularisation, simpler model" },
+        { key: "max_iter", label: "Max Iterations", type: "int", min: 100, max: 5000, step: 100, default: 1000, effect: "Increase if model fails to converge" },
     ],
     decision_tree: [
         { key: "max_depth", label: "Max Depth", type: "int", min: 1, max: 30, step: 1, default: 5, effect: "Deeper → more complex, prone to overfitting" },
         { key: "min_samples_split", label: "Min Samples to Split", type: "int", min: 2, max: 50, step: 1, default: 2, effect: "Higher → simpler tree, better generalisation" },
         { key: "min_samples_leaf", label: "Min Samples at Leaf", type: "int", min: 1, max: 20, step: 1, default: 1, effect: "Higher → smoother decision boundary" },
+        { key: "criterion", label: "Split Criterion", type: "select", default: "gini", options: ["gini", "entropy"], effect: "Gini is faster, entropy can be more accurate" },
     ],
     knn: [
-        { key: "n_neighbors", label: "Neighbours (K)", type: "int", min: 1, max: 50, step: 1, default: 5, effect: "Higher K → smoother boundary, lower variance, higher bias" },
+        { key: "n_neighbors", label: "Number of Neighbours (K)", type: "int", min: 1, max: 50, step: 1, default: 5, effect: "Higher K → smoother boundary, more bias" },
+        { key: "weights", label: "Weighting", type: "select", min: 0, max: 0, step: 0, default: "uniform", options: ["uniform", "distance"], effect: "Distance weighting gives closer neighbours more influence" },
+        { key: "p", label: "Distance Metric (p)", type: "int", min: 1, max: 2, step: 1, default: 2, effect: "p=1 is Manhattan, p=2 is Euclidean distance" },
     ],
     gradient_boosting: [
         { key: "n_estimators", label: "Boosting Rounds", type: "int", min: 10, max: 500, step: 10, default: 100, effect: "More rounds → better fit, slower training" },
-        { key: "max_depth", label: "Max Depth", type: "int", min: 1, max: 10, step: 1, default: 3, effect: "Shallower is usually better for boosting" },
-        { key: "learning_rate", label: "Learning Rate", type: "float", min: 0.01, max: 0.5, step: 0.01, default: 0.1, effect: "Lower → needs more rounds but generalises better" },
+        { key: "max_depth", label: "Max Tree Depth", type: "int", min: 1, max: 10, step: 1, default: 3, effect: "Shallow trees work best for boosting (3-5)" },
+        { key: "learning_rate", label: "Learning Rate", type: "float", min: 0.01, max: 0.5, step: 0.01, default: 0.1, effect: "Lower → needs more rounds, generalises better" },
+        { key: "subsample", label: "Subsample Ratio", type: "float", min: 0.5, max: 1.0, step: 0.05, default: 1.0, effect: "Lower → stochastic boosting, reduces overfitting" },
+    ],
+    naive_bayes: [],
+    svm: [
+        { key: "C", label: "Regularisation (C)", type: "float", min: 0.01, max: 100.0, step: 0.1, default: 1.0, effect: "Lower C → wider margin, more misclassifications allowed" },
+        { key: "kernel", label: "Kernel", type: "select", min: 0, max: 0, step: 0, default: "rbf", options: ["rbf", "linear", "poly", "sigmoid"], effect: "RBF works well for most non-linear problems" },
     ],
     ridge: [
-        { key: "alpha", label: "Alpha (L2 strength)", type: "float", min: 0.01, max: 100.0, step: 0.1, default: 1.0, effect: "Higher alpha → stronger regularisation, simpler model" },
+        { key: "alpha", label: "Alpha (L2 strength)", type: "float", min: 0.01, max: 100.0, step: 0.1, default: 1.0, effect: "Higher → stronger shrinkage of coefficients" },
     ],
     lasso: [
-        { key: "alpha", label: "Alpha (L1 strength)", type: "float", min: 0.01, max: 10.0, step: 0.01, default: 1.0, effect: "Higher alpha → more features shrunk to zero (feature selection)" },
+        { key: "alpha", label: "Alpha (L1 strength)", type: "float", min: 0.001, max: 10.0, step: 0.01, default: 1.0, effect: "Higher → more features shrunk to exactly zero" },
     ],
     elasticnet: [
-        { key: "alpha", label: "Alpha", type: "float", min: 0.01, max: 10.0, step: 0.01, default: 1.0, effect: "Controls overall regularisation strength" },
-        { key: "l1_ratio", label: "L1 Ratio", type: "float", min: 0.0, max: 1.0, step: 0.05, default: 0.5, effect: "0 = Ridge only, 1 = Lasso only, 0.5 = balanced" },
+        { key: "alpha", label: "Alpha", type: "float", min: 0.001, max: 10.0, step: 0.01, default: 1.0, effect: "Controls overall regularisation strength" },
+        { key: "l1_ratio", label: "L1 Ratio", type: "float", min: 0.0, max: 1.0, step: 0.05, default: 0.5, effect: "0 = pure Ridge, 1 = pure Lasso, 0.5 = balanced" },
+    ],
+    svr: [
+        { key: "C", label: "Regularisation (C)", type: "float", min: 0.01, max: 100.0, step: 0.1, default: 1.0, effect: "Lower → smoother regression line, more tolerance" },
+        { key: "epsilon", label: "Epsilon (tube width)", type: "float", min: 0.0, max: 1.0, step: 0.01, default: 0.1, effect: "Larger → more tolerance for prediction errors" },
     ],
 };
 
@@ -258,11 +288,18 @@ export default function PlaygroundPage() {
 
     const [trainParams, setTrainParams] = useState<Record<string, any>>({});
 
+    const [datasetName, setDatasetName] = useState<string>("");
+
     useEffect(() => {
         if (!sessionId) return;
         localStorage.setItem("ml_last_session", sessionId);
         getSession(sessionId).then(s => {
             setSession(s);
+            // Get display name from datasets list
+            getDatasets().then(datasets => {
+                const ds = datasets.find(d => d.id === s.dataset_id);
+                setDatasetName(ds?.name || s.dataset_id.replace("upload_", "Upload: ").replace(/_/g, " "));
+            });
             return getProfile(s.dataset_id);
         }).then(setProfile);
     }, [sessionId]);
@@ -350,26 +387,23 @@ export default function PlaygroundPage() {
         <div className="h-screen bg-slate-950 flex flex-col overflow-hidden">
 
             {/* Top bar */}
-            <header className="h-12 bg-slate-900 border-b border-slate-800 flex items-center px-5 gap-4 flex-shrink-0">
-                <button onClick={() => router.push("/")} className="text-slate-500 hover:text-white transition-colors text-sm font-medium">
-                    ← Home
+            <header className="h-11 bg-slate-900 border-b border-slate-800 flex items-center px-4 gap-3 flex-shrink-0">
+                <button onClick={() => router.push("/")} className="text-xs text-slate-500 hover:text-white transition-colors font-medium">
+                    ← Back
                 </button>
-                <div className="w-px h-4 bg-slate-700" />
-                <span className="text-white font-semibold text-sm">ML Playground</span>
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                <div className="ml-auto flex items-center gap-3">
-                    <span className="text-xs text-slate-400 capitalize font-medium">{session.dataset_id}</span>
-                    <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${session.task_type === "classification"
-                            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                            : "bg-amber-500/10 text-amber-400 border border-amber-500/20"}`}>
-                        {label(session.task_type)}
+                <div className="w-px h-3.5 bg-slate-800" />
+                <span className="text-xs font-semibold text-white">ML Playground</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                <div className="ml-auto flex items-center gap-2.5">
+                    <span className="text-xs text-slate-400 font-medium">{datasetName}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${session.task_type === "classification"
+                            ? "bg-emerald-500/10 text-emerald-400"
+                            : "bg-amber-500/10 text-amber-400"}`}>
+                        {session.task_type === "classification" ? "Classification" : "Regression"}
                     </span>
                     <button onClick={exportCode}
-                        className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg
-              bg-slate-800 text-slate-300 border border-slate-700
-              hover:bg-slate-700 hover:text-white transition-colors font-medium">
-                        <Download className="w-3.5 h-3.5" />
-                        Export Python
+                        className="text-xs px-2.5 py-1 rounded-md bg-slate-800 text-slate-400 border border-slate-700 hover:text-white hover:border-slate-600 transition-colors font-medium flex items-center gap-1">
+                        <Download className="w-3 h-3" /> Export
                     </button>
                 </div>
             </header>
@@ -397,11 +431,12 @@ export default function PlaygroundPage() {
                                 return (
                                     <button key={step.id}
                                         onClick={() => setActiveStep(step.id)}
-                                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-medium transition-all text-left ${active
-                                                ? "bg-blue-600/15 text-blue-300 border border-blue-500/25"
+                                        className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-xs font-medium transition-all text-left ${active
+                                                ? "bg-blue-500/10 text-blue-300 border border-blue-500/20"
                                                 : done
-                                                    ? "text-slate-300 hover:bg-slate-800"
-                                                    : "text-slate-500 hover:bg-slate-800/50 hover:text-slate-400"}`}>
+                                                    ? "text-slate-400 hover:bg-slate-800"
+                                                    : "text-slate-600 hover:bg-slate-800/40"
+                                            }`}>
                                         <span className="flex-shrink-0">
                                             {done
                                                 ? <CheckCircle2 className="w-4 h-4 text-emerald-400" />
@@ -445,21 +480,17 @@ export default function PlaygroundPage() {
                 <main className="flex-1 flex flex-col overflow-hidden">
 
                     {/* Step header */}
-                    <div className="px-6 py-4 border-b border-slate-800 flex-shrink-0 bg-slate-900/30">
+                    <div className="px-5 py-3 border-b border-slate-800 flex-shrink-0">
                         <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                                <span className="text-xs font-mono px-2 py-0.5 rounded
-                  bg-slate-800 text-slate-400 border border-slate-700">
-                                    {activeStep} / {STEPS.length}
-                                </span>
+                            <div className="flex items-center gap-2.5">
+                                <span className="text-xs font-mono text-slate-500">{activeStep}/{STEPS.length}</span>
+                                <span className="text-slate-700">·</span>
                                 <h1 className="text-sm font-semibold text-white">{currentStep?.label}</h1>
                             </div>
                             {activeStep < STEPS.length && (
                                 <button onClick={advance}
-                                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg
-                    text-slate-400 hover:text-white border border-slate-700
-                    hover:border-slate-600 transition-colors font-medium">
-                                    Next Step <ArrowRight className="w-3 h-3" />
+                                    className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300 transition-colors font-medium">
+                                    Skip <ArrowRight className="w-3 h-3" />
                                 </button>
                             )}
                         </div>
@@ -586,15 +617,14 @@ function ProfileView({ profile, onNext }: { profile: DatasetProfile; onNext: () 
         <div className="max-w-3xl space-y-5">
             <div className="grid grid-cols-4 gap-3">
                 {[
-                    { label: "Total Rows", value: profile.shape.rows.toLocaleString() },
-                    { label: "Total Columns", value: profile.shape.cols },
+                    { label: "Rows", value: profile.shape.rows.toLocaleString() },
+                    { label: "Columns", value: profile.shape.cols },
                     { label: "Missing Cells", value: profile.missing_summary.total_missing_cells },
-                    { label: "Duplicate Rows", value: profile.duplicate_rows },
+                    { label: "Duplicates", value: profile.duplicate_rows },
                 ].map(item => (
-                    <div key={item.label}
-                        className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-                        <div className="text-2xl font-bold text-white font-mono">{item.value}</div>
-                        <div className="text-xs text-slate-400 mt-1">{item.label}</div>
+                    <div key={item.label} className="bg-slate-900 border border-slate-800 rounded-lg p-3">
+                        <div className="text-lg font-bold text-white font-mono">{item.value}</div>
+                        <div className="text-xs text-slate-500 mt-0.5 font-medium">{item.label}</div>
                     </div>
                 ))}
             </div>
@@ -607,8 +637,8 @@ function ProfileView({ profile, onNext }: { profile: DatasetProfile; onNext: () 
                     <table className="w-full text-sm">
                         <thead>
                             <tr className="border-b border-slate-800">
-                                {["Column", "Data Type", "Missing", "Unique Values", "Notes"].map(h => (
-                                    <th key={h} className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">{h}</th>
+                                {["Column", "Data Type", "Missing %", "Unique", "Notes"].map(h => (
+                                    <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 tracking-wide border-b border-slate-800">{h}</th>
                                 ))}
                             </tr>
                         </thead>
@@ -909,13 +939,13 @@ function StepView({ step, techniques, selected, onSelect, onApply, loading,
             <div className="grid grid-cols-2 gap-2">
                 {techniques.map(t => (
                     <button key={t.value} onClick={() => onSelect(t.value)}
-                        className={`text-left px-4 py-3.5 rounded-xl border transition-all ${selected === t.value
-                                ? "bg-blue-600/10 border-blue-500/40 ring-1 ring-blue-500/20"
-                                : "bg-slate-900 border-slate-800 hover:border-slate-700 hover:bg-slate-800/60"}`}>
-                        <div className={`text-sm font-semibold ${selected === t.value ? "text-blue-300" : "text-slate-200"}`}>
+                        className={`text-left px-3.5 py-3 rounded-lg border transition-all ${selected === t.value
+                                ? "bg-blue-500/8 border-blue-500/50"
+                                : "bg-slate-900 border-slate-800 hover:border-slate-700"}`}>
+                        <div className={`text-xs font-semibold ${selected === t.value ? "text-blue-300" : "text-slate-200"}`}>
                             {t.label}
                         </div>
-                        <div className="text-xs text-slate-500 mt-1 leading-relaxed">{t.desc}</div>
+                        <div className="text-xs text-slate-500 mt-0.5 leading-relaxed">{t.desc}</div>
                     </button>
                 ))}
             </div>
@@ -1765,17 +1795,15 @@ function RightPanel({ latestResult, trainResult }: {
 
             {/* AI explanation */}
             <div className="border-b border-slate-800">
-                <div className="flex items-center gap-2 px-4 py-3">
-                    <Sparkles className="w-4 h-4 text-blue-400" />
-                    <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider">AI Explanation</span>
+                <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-slate-800">
+                    <Sparkles className="w-3 h-3 text-blue-400" />
+                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">AI Explanation</span>
                 </div>
-                <div className="px-4 pb-4">
+                <div className="px-4 pb-3 pt-2">
                     {latestResult?.ai_explanation ? (
-                        <p className="text-sm text-slate-300 leading-relaxed">{latestResult.ai_explanation}</p>
+                        <p className="text-xs text-slate-400 leading-relaxed">{latestResult.ai_explanation}</p>
                     ) : (
-                        <p className="text-sm text-slate-600 italic leading-relaxed">
-                            Apply a technique to see the AI explain what happened and why.
-                        </p>
+                        <p className="text-xs text-slate-600 leading-relaxed">Apply a technique to see the explanation.</p>
                     )}
                 </div>
             </div>
