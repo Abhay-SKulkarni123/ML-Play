@@ -77,6 +77,7 @@ const STEPS = [
     { id: 11, key: "tune", label: "Hyperparameter Tuning", action: "tune" },
     { id: 12, key: "explain", label: "Explainability", action: null },
     { id: 13, key: "compare", label: "Experiment Comparison", action: null },
+    { id: 14, key: "predict", label: "Make a Prediction" },
 ];
 
 // ─── TECHNIQUES ───────────────────────────────────────────────────────────────
@@ -326,33 +327,35 @@ export default function PlaygroundPage() {
         try {
             if (stepKey === "train") {
                 const model = selected["train"] || "random_forest";
-                const res = await trainModel(session.id, model, trainParams);
+                const res = await trainModel(session.id, model, modelParams);
                 setTrainResults(prev => [res, ...prev]);
             } else if (stepKey === "tune") {
                 const model = selected["tune_model"] || "random_forest";
                 const method = selected["tune_method"] || "optuna";
-                let res: TrainResponse;
-                if (method === "gridsearch") {
-                    res = await gridSearch(session.id);
-                } else {
-                    res = await tuneModel(session.id, model);
-                }
+                const res = method === "gridsearch"
+                    ? await gridSearch(session.id)
+                    : await tuneModel(session.id, model);
                 setTuneResult(res);
             } else {
-                const technique = selected[stepKey] || TECHNIQUES[stepKey][0].value;
-                const techObj = TECHNIQUES[stepKey]?.find(t => t.value === technique);
-                const res = await runStep(session.id, stepKey, technique, techObj?.params || {});
-                // Allow multiple tries — prepend new result
-                setResults(prev => ({
+                // CRITICAL FIX: always read the CURRENT selected value fresh, never cache
+                const currentTechniques = TECHNIQUES[stepKey] || [];
+                const tech = selected[stepKey] ?? currentTechniques[0]?.value;
+                const techObj = currentTechniques.find(t => t.value === tech);
+                const params = { ...(techObj?.params || {}) };
+
+                console.log(`[apply] step=${stepKey} technique=${tech}`); // TEMP DEBUG — remove after confirming fix
+
+                const res = await runStep(session.id, stepKey, tech, params);
+                setStepResults(prev => ({
                     ...prev,
                     [stepKey]: [res, ...(prev[stepKey] || [])],
                 }));
             }
-        } catch (e: any) {
-            console.error(e.message);
-        } finally {
-            setLoading(null);
-        }
+            if (stepKey !== "tune") {
+                setActiveStep(s => Math.min(s + 1, STEPS.length));
+            }
+        } catch (e: any) { console.error(e.message); }
+        finally { setLoading(null); }
     }
 
     function advance() {
@@ -582,6 +585,8 @@ export default function PlaygroundPage() {
                                 taskType={session.task_type}
                             />
                         )}
+
+                        {activeStep === 14 && <PredictView profile={profile} session={session} finalModel={finalModel} />}
                     </div>
 
                     {/* Bottom chart bar */}
@@ -1630,6 +1635,88 @@ function CompareView({ runs, taskType }: { runs: RunRecord[]; taskType: string }
                     <p className="text-sm text-amber-400">
                         Only one run found. Train another model in Step 10 to compare.
                     </p>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ─── PREDICT VIEW ─────────────────────────────────────────────────────────────
+
+function PredictView({ profile, session, finalModel }: {
+    profile: DatasetProfile; session: Session; finalModel?: TrainResponse;
+}) {
+    const [inputs, setInputs] = useState<Record<string, string>>({});
+    const [result, setResult] = useState<{ prediction: any; confidence: number | null; model_used: string } | null>(null);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const inputCols = profile.columns.filter(c => !c.is_target);
+
+    async function handlePredict() {
+        setLoading(true);
+        setError(null);
+        try {
+            const inputData: Record<string, any> = {};
+            inputCols.forEach(col => {
+                const val = inputs[col.name];
+                inputData[col.name] = col.type === "numeric" ? parseFloat(val) || 0 : val || "";
+            });
+            const { predict } = await import("@/lib/api");
+            const res = await predict(session.id, inputData);
+            setResult(res);
+        } catch (e: any) {
+            setError(e.message || "Prediction failed. Train a model first.");
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    if (!finalModel) return (
+        <div className="text-xs text-slate-500">Train a model in Step 10 before making predictions.</div>
+    );
+
+    return (
+        <div className="max-w-2xl space-y-4">
+            <p className="text-xs text-slate-500">
+                Enter feature values below and get a live prediction from your trained{" "}
+                <span className="text-slate-300 font-semibold">
+                    {TECHNIQUES.train.find(m => m.value === finalModel.model)?.label || finalModel.model}
+                </span> model.
+            </p>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 grid grid-cols-2 gap-3">
+                {inputCols.map(col => (
+                    <div key={col.name}>
+                        <label className="text-xs text-slate-500 font-medium block mb-1">
+                            {col.name} <span className="text-slate-700">({col.type})</span>
+                        </label>
+                        <input
+                            value={inputs[col.name] || ""}
+                            onChange={e => setInputs(p => ({ ...p, [col.name]: e.target.value }))}
+                            placeholder={col.type === "numeric" ? String(col.stats?.mean ?? 0) : "value"}
+                            className="w-full text-xs bg-slate-950 border border-slate-800 rounded-md
+                px-2.5 py-1.5 text-slate-300 focus:outline-none focus:border-blue-500"
+                        />
+                    </div>
+                ))}
+            </div>
+
+            {error && <p className="text-xs text-red-400">{error}</p>}
+
+            <button onClick={handlePredict} disabled={loading}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500
+          disabled:opacity-40 text-white text-xs font-semibold rounded-lg transition-colors">
+                {loading ? <><Loader2 className="w-3.5 h-3.5 animate-spin" />Predicting...</> : "Predict →"}
+            </button>
+
+            {result && (
+                <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-4">
+                    <p className="text-xs text-slate-500 mb-1">Prediction</p>
+                    <p className="text-2xl font-bold font-mono text-emerald-400">{String(result.prediction)}</p>
+                    {result.confidence !== null && (
+                        <p className="text-xs text-slate-500 mt-1">Confidence: {(result.confidence * 100).toFixed(1)}%</p>
+                    )}
                 </div>
             )}
         </div>

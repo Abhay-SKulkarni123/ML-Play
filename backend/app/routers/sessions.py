@@ -7,6 +7,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from sklearn.impute import KNNImputer
@@ -695,3 +696,70 @@ def _fallback_explanation(result: PipelineStepResult) -> str:
         ).strip()
 
     return f"Applied {result.technique} to step '{result.step}'. {w}".strip()
+
+class PredictRequest(BaseModel):
+    input_data: dict
+
+
+@router.post("/{session_id}/predict")
+async def predict(
+    session_id: uuid.UUID,
+    body: PredictRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    session = await _get_session_or_404(session_id, db)
+    meta = _load_meta()
+    dataset_meta = meta[session.dataset_id]
+    target_col = dataset_meta["target"]
+    task = session.task_type
+
+    result = await db.execute(
+        select(TrainingRun)
+        .where(TrainingRun.session_id == session_id)
+        .order_by(desc(TrainingRun.created_at))
+        .limit(1)
+    )
+    last_run = result.scalar_one_or_none()
+    if not last_run:
+        raise HTTPException(status_code=400, detail="Train a model first before predicting.")
+
+    df = load_dataset(session.dataset_id)
+    X_full = df.drop(columns=[target_col])
+    y_full = df[target_col]
+
+    from app.services.ml.training import _apply_pipeline_split_aware
+    from sklearn.model_selection import train_test_split
+
+    stratify = y_full if task == "classification" else None
+    X_train_raw, X_test_raw, y_train, y_test = train_test_split(
+        X_full, y_full, test_size=0.2, random_state=42, stratify=stratify
+    )
+    X_train, _, y_train = _apply_pipeline_split_aware(
+        X_train_raw.copy(), X_test_raw.copy(), y_train,
+        dict(session.pipeline_state), target_col,
+    )
+    X_train = X_train.select_dtypes(include="number")
+
+    input_df = pd.DataFrame([body.input_data])
+    for col in X_train.columns:
+        if col not in input_df.columns:
+            input_df[col] = X_train[col].median() if col in X_train.columns else 0
+    input_df = input_df[X_train.columns]
+
+    from app.services.ml.training import _build_classifier, _build_regressor
+    model = (_build_classifier(last_run.model_name, last_run.params)
+             if task == "classification"
+             else _build_regressor(last_run.model_name, last_run.params))
+    model.fit(X_train, y_train)
+    pred = model.predict(input_df)[0]
+
+    confidence = None
+    if task == "classification" and hasattr(model, "predict_proba"):
+        proba = model.predict_proba(input_df)[0]
+        confidence = round(float(max(proba)), 4)
+
+    return {
+        "prediction": float(pred) if isinstance(pred, (int, float, np.integer, np.floating)) else str(pred),
+        "confidence": confidence,
+        "model_used": last_run.model_name,
+    }

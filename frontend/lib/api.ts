@@ -230,3 +230,14 @@ export const uploadDataset = (formData: FormData) =>
     }>("/datasets/upload", formData, { headers: { "Content-Type": "multipart/form-data" } })
     .then((r) => r.data);
 
+    export const predict = (
+      sessionId: string,
+      inputData: Record<string, any>,
+    ) =>
+      api
+        .post<{
+          prediction: number | string;
+          confidence: number | null;
+          model_used: string;
+        }>(`/sessions/${sessionId}/predict`, { input_data: inputData })
+        .then((r) => r.data);
