@@ -1,14 +1,13 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, DateTime, JSON, ForeignKey, Integer, Float, Text
+from sqlalchemy import String, DateTime, JSON, ForeignKey, Integer, Float, Text, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID
 from app.core.database import Base
 
 class MLSession(Base):
     __tablename__ = "ml_sessions"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     dataset_id: Mapped[str] = mapped_column(String(100))
     task_type: Mapped[str] = mapped_column(String(50), default="unknown")
     current_step: Mapped[int] = mapped_column(Integer, default=1)
@@ -23,8 +22,8 @@ class MLSession(Base):
 class StepResult(Base):
     __tablename__ = "step_results"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ml_sessions.id"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id: Mapped[str] = mapped_column(String(36), ForeignKey("ml_sessions.id"))
     step_number: Mapped[int] = mapped_column(Integer)
     step_name: Mapped[str] = mapped_column(String(100))
     technique: Mapped[str] = mapped_column(String(100))
@@ -40,8 +39,8 @@ class StepResult(Base):
 class TrainingRun(Base):
     __tablename__ = "training_runs"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ml_sessions.id"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id: Mapped[str] = mapped_column(String(36), ForeignKey("ml_sessions.id"))
     model_name: Mapped[str] = mapped_column(String(100))
     params: Mapped[dict] = mapped_column(JSON, default=dict)
     metrics: Mapped[dict] = mapped_column(JSON, default=dict)

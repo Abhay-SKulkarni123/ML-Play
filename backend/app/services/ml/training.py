@@ -22,7 +22,7 @@ from xgboost import XGBClassifier, XGBRegressor
 from lightgbm import LGBMClassifier, LGBMRegressor
 
 
-def _build_classifier(name: str, params: dict):
+def _build_classifier(name: str, params: dict, class_weight: str | None = None):
     """
     Build classifier with safe defaults.
     Params from Optuna override defaults — no duplicate keyword args.
@@ -44,15 +44,17 @@ def _build_classifier(name: str, params: dict):
     merged = {**defaults.get(name, {}), **params}
 
     constructors = {
-        "logistic_regression":  lambda p: LogisticRegression(**p),
-        "random_forest":        lambda p: RandomForestClassifier(**p),
+        "logistic_regression":  lambda p: LogisticRegression(class_weight=class_weight, **p),
+        "random_forest":        lambda p: RandomForestClassifier(class_weight=class_weight, **p),
         "xgboost":              lambda p: XGBClassifier(**p),
-        "lightgbm":             lambda p: LGBMClassifier(**p),
-        "svm":                  lambda p: SVC(**p),
+        "lightgbm":             lambda p: LGBMClassifier(class_weight=class_weight, **p),
+        "svm":                  lambda p: SVC(class_weight=class_weight, **p),
         "knn":                  lambda p: KNeighborsClassifier(**p),
         "naive_bayes":          lambda p: GaussianNB(),
-        "decision_tree":        lambda p: DecisionTreeClassifier(**p),
+        "decision_tree":        lambda p: DecisionTreeClassifier(class_weight=class_weight, **p),
         "gradient_boosting":    lambda p: GradientBoostingClassifier(**p),
+        "adaboost":             lambda p: __import__('sklearn.ensemble', fromlist=['AdaBoostClassifier']).AdaBoostClassifier(**p),
+        "catboost":             lambda p: __import__('catboost', fromlist=['CatBoostClassifier']).CatBoostClassifier(**p),
     }
     if name not in constructors:
         raise ValueError(f"Unknown classifier: {name}")
@@ -113,6 +115,23 @@ def train_model(
     X_raw = df.drop(columns=[target_col])
     y = df[target_col]
 
+    # Drop ID-like columns that have no predictive value
+    id_patterns = ["id", "passengerid", "passenger_id", "unnamed:_0", "index"]
+    id_cols = [c for c in X_raw.columns if any(p in c.lower().replace(" ", "_") for p in id_patterns)]
+    if id_cols:
+        X_raw = X_raw.drop(columns=id_cols)
+
+    # Drop high-cardinality categorical columns (>50 unique values) and text columns
+    # These create noise and don't generalize
+    cat_cols = X_raw.select_dtypes(exclude="number").columns.tolist()
+    noisy_cols = []
+    for col in cat_cols:
+        unique_count = X_raw[col].nunique()
+        if unique_count > 50:
+            noisy_cols.append(col)
+    if noisy_cols:
+        X_raw = X_raw.drop(columns=noisy_cols)
+
     # Split FIRST — before any fitting
     stratify = y if task == "classification" else None
     X_train_raw, X_test_raw, y_train, y_test = train_test_split(
@@ -120,11 +139,18 @@ def train_model(
     )
 
     # Apply transformations fit on X_train only
-    X_train, X_test = _apply_pipeline_split_aware(
+    X_train, X_test, y_train = _apply_pipeline_split_aware(
         X_train_raw, X_test_raw, y_train, pipeline_state, target_col
     )
 
-    # Keep only numeric columns
+    # Keep only numeric columns — but if categoricals remain (encoding skipped),
+    # auto-encode them so the model always has usable features
+    cat_cols = X_train.select_dtypes(exclude="number").columns.tolist()
+    if cat_cols:
+        for col in cat_cols:
+            le = LabelEncoder()
+            X_train[col] = le.fit_transform(X_train[col].astype(str))
+            X_test[col]  = X_test[col].astype(str).map(lambda v: le.classes_.tolist().index(v) if v in le.classes_ else -1)
     X_train = X_train.select_dtypes(include="number")
     X_test  = X_test.select_dtypes(include="number")
 
@@ -133,7 +159,12 @@ def train_model(
 
     # Build and fit model
     if task == "classification":
-        model = _build_classifier(model_name, model_params)
+        # Detect class imbalance and use balanced weights
+        class_counts = y_train.value_counts()
+        imbalance_ratio = float(class_counts.min() / class_counts.max())
+        class_weight = "balanced" if imbalance_ratio < 0.5 else None
+        
+        model = _build_classifier(model_name, model_params, class_weight=class_weight)
         cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
         cv_scoring = "f1_weighted"
     else:
@@ -206,10 +237,11 @@ def _apply_pipeline_split_aware(
     y_train: pd.Series,
     pipeline_state: dict,
     target_col: str,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series]:
     """
     Apply each preprocessing step by fitting on X_train, transforming both.
     This is the correct approach — no leakage.
+    Returns X_train, X_test, y_train (y_train may be updated by drop_rows).
     """
     X_train = X_train.copy()
     X_test  = X_test.copy()
@@ -230,11 +262,11 @@ def _apply_pipeline_split_aware(
         technique = pipeline_state[step_name]["technique"]
         params    = pipeline_state[step_name]["params"]
 
-        X_train, X_test = _apply_step_split_aware(
+        X_train, X_test, y_train = _apply_step_split_aware(
             X_train, X_test, y_train, step_name, technique, params, target_col
         )
 
-    return X_train, X_test
+    return X_train, X_test, y_train
 
 
 def _apply_step_split_aware(
@@ -245,7 +277,7 @@ def _apply_step_split_aware(
     technique: str,
     params: dict,
     target_col: str,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series]:
     from sklearn.impute import KNNImputer
     from sklearn.experimental import enable_iterative_imputer  # noqa
     from sklearn.impute import IterativeImputer
@@ -297,7 +329,8 @@ def _apply_step_split_aware(
             X_test  = X_test.fillna(fill_value)
 
         elif technique == "drop_rows":
-            X_train = X_train.dropna()
+            mask = X_train.notna().all(axis=1)
+            X_train = X_train[mask]
             y_train = y_train.loc[X_train.index]
             # Don't drop test rows — impute with median instead
             medians = X_train[num_cols_train].median()
@@ -338,6 +371,8 @@ def _apply_step_split_aware(
                     lower=mean - threshold * std,
                     upper=mean + threshold * std,
                 )
+                # Align y_train with updated X_train
+                y_train = y_train.loc[X_train.index]
 
         elif technique == "log_transform":
             for col in num_cols:
@@ -453,4 +488,4 @@ def _apply_step_split_aware(
             X_train[num_cols] = scaler.fit_transform(X_train[num_cols])
             X_test[num_cols]  = scaler.transform(X_test[num_cols])
 
-    return X_train, X_test
+    return X_train, X_test, y_train

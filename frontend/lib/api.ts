@@ -1,27 +1,26 @@
-import axios, { AxiosError } from "axios";
+import axios from "axios";
 
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL,
-  headers: { "Content-Type": "application/json" },
-  timeout: 180000, // 3 minutes — covers Optuna search
+  baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000",
+  timeout: 180_000,
 });
 
-// Global error interceptor — normalises all API errors
+// Normalise error messages
 api.interceptors.response.use(
-  (res) => res,
-  (error: AxiosError) => {
-    const detail = (error.response?.data as any)?.detail;
-    const message =
+  (r) => r,
+  (err) => {
+    const detail = err?.response?.data?.detail;
+    const msg =
       typeof detail === "string"
         ? detail
         : typeof detail === "object" && detail?.error
           ? detail.error
-          : error.message;
-    return Promise.reject(new Error(message));
+          : err?.message || "Unknown error";
+    return Promise.reject(new Error(msg));
   },
 );
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── TYPES ────────────────────────────────────────────────────────────────────
 
 export interface Dataset {
   id: string;
@@ -32,40 +31,23 @@ export interface Dataset {
   cols: number;
 }
 
-export interface ColumnProfile {
-  name: string;
-  dtype: string;
-  type: "numeric" | "categorical";
-  missing_count: number;
-  missing_pct: number;
-  unique_count: number;
-  is_target: boolean;
-  stats: Record<string, any>;
-  histogram?: { counts: number[]; edges: number[] };
-}
-
-export interface DatasetProfile {
-  shape: { rows: number; cols: number };
-  target: string;
-  task: string;
-  columns: ColumnProfile[];
-  missing_summary: {
-    total_missing_cells: number;
-    columns_with_missing: string[];
-    pct_complete: number;
-  };
-  duplicate_rows: number;
+export interface Session {
+  id: string;
+  dataset_id: string;
+  task_type: string;
+  current_step: number;
+  pipeline_state: Record<string, any>;
+  created_at: string;
 }
 
 export interface StepResponse {
-  ai_recommendation: import("react").JSX.Element;
   step: string;
   technique: string;
   params: Record<string, any>;
   stats: Record<string, any>;
   warnings: string[];
   ai_explanation: string;
-  metrics_delta: Record<string, any>;
+  ai_recommendation: string;
 }
 
 export interface TrainResponse {
@@ -78,13 +60,28 @@ export interface TrainResponse {
   n_features: number;
 }
 
-export interface Session {
+export interface RunRecord {
   id: string;
-  dataset_id: string;
-  task_type: string;
-  current_step: number;
-  pipeline_state: Record<string, any>;
+  model_name: string;
+  params: Record<string, any>;
+  metrics: Record<string, any>;
+  feature_importance: Record<string, number>;
   created_at: string;
+}
+
+export interface DatasetProfile {
+  shape: { rows: number; cols: number };
+  missing_summary: { total_missing_cells: number };
+  duplicate_rows: number;
+  columns: Array<{
+    name: string;
+    type: string;
+    missing_count: number;
+    missing_pct: number;
+    unique_count: number;
+    is_target: boolean;
+    stats?: Record<string, number>;
+  }>;
 }
 
 export interface EDADistributions {
@@ -103,120 +100,42 @@ export interface EDACorrelation {
 
 export interface EDATargetAnalysis {
   target: string;
-  task: string;
-  distribution?: { labels: string[]; counts: number[] };
+  is_imbalanced: boolean;
   class_balance?: number;
-  is_imbalanced?: boolean;
-  n_classes?: number;
-  histogram?: { counts: number[]; edges: number[] };
-  stats?: Record<string, number>;
-}
-
-export interface RunRecord {
-  id: string;
-  model_name: string;
-  params: Record<string, any>;
-  metrics: Record<string, any>;
-  feature_importance: Record<string, number>;
-  created_at: string;
+  distribution?: { labels: (string | number)[]; counts: number[] };
 }
 
 export interface AutoMLStatus {
   status: "pending" | "running" | "done" | "error";
   progress: number;
-  task?: string;
-  metrics?: Record<string, any>;
-  feature_importance?: Record<string, number>;
-  pipeline_summary?: Record<string, any>;
-  shape?: { rows: number; cols: number };
   log?: string[];
+  task?: string;
+  metrics?: Record<string, number>;
+  feature_importance?: Record<string, number>;
+  pipeline_summary?: {
+    n_trials: number;
+    best_trial_score: number;
+    best_params: Record<string, any>;
+    model: string;
+    missing_cols_dropped?: string[];
+    categorical_cols_encoded?: string[];
+    imputation?: string;
+    scaling?: string;
+  };
+  shape?: { rows: number; cols: number };
   n_features?: number;
   train_size?: number;
   test_size?: number;
   error?: string;
 }
 
-// ─── API calls ────────────────────────────────────────────────────────────────
+// ─── DATASETS ─────────────────────────────────────────────────────────────────
 
 export const getDatasets = () =>
   api.get<Dataset[]>("/datasets/").then((r) => r.data);
-export const getProfile = (id: string) =>
-  api.get<DatasetProfile>(`/datasets/${id}/profile`).then((r) => r.data);
-export const createSession = (dataset_id: string) =>
-  api.post<Session>("/sessions/", { dataset_id }).then((r) => r.data);
-export const getSession = (id: string) =>
-  api.get<Session>(`/sessions/${id}`).then((r) => r.data);
-export const getDistributions = (id: string) =>
-  api.get<EDADistributions>(`/eda/${id}/distributions`).then((r) => r.data);
-export const getCorrelation = (id: string) =>
-  api.get<EDACorrelation>(`/eda/${id}/correlation`).then((r) => r.data);
-export const getTargetAnalysis = (id: string) =>
-  api.get<EDATargetAnalysis>(`/eda/${id}/target-analysis`).then((r) => r.data);
-export const getRuns = (sessionId: string) =>
-  api.get<RunRecord[]>(`/sessions/${sessionId}/runs`).then((r) => r.data);
 
-export const runStep = (
-  sessionId: string,
-  step: string,
-  technique: string,
-  params = {},
-) =>
-  api
-    .post<StepResponse>(`/sessions/${sessionId}/steps/${step}`, {
-      technique,
-      params,
-    })
-    .then((r) => r.data);
-
-export const trainModel = (
-  sessionId: string,
-  model_name: string,
-  params = {},
-  test_size = 0.2,
-) =>
-  api
-    .post<TrainResponse>(`/sessions/${sessionId}/train`, {
-      model_name,
-      params,
-      test_size,
-    })
-    .then((r) => r.data);
-
-export const tuneModel = (
-  sessionId: string,
-  model_name: string,
-  test_size = 0.2,
-) =>
-  api
-    .post<TrainResponse>(`/sessions/${sessionId}/tune`, {
-      model_name,
-      params: {},
-      test_size,
-    })
-    .then((r) => r.data);
-
-export const runAutoML = (formData: FormData) =>
-  api
-    .post<{
-      job_id: string;
-      status: string;
-      columns: string[];
-    }>("/automl/run", formData, {
-      headers: { "Content-Type": "multipart/form-data" },
-    })
-    .then((r) => r.data);
-
-export const getAutoMLStatus = (jobId: string) =>
-  api.get<AutoMLStatus>(`/automl/status/${jobId}`).then((r) => r.data);
-
-export const gridSearch = (sessionId: string, test_size = 0.2) =>
-  api
-    .post<TrainResponse>(`/sessions/${sessionId}/gridsearch`, {
-      model_name: "random_forest",
-      params: {},
-      test_size,
-    })
-    .then((r) => r.data);
+export const getProfile = (datasetId: string) =>
+  api.get<DatasetProfile>(`/datasets/${datasetId}/profile`).then((r) => r.data);
 
 export const uploadDataset = (formData: FormData) =>
   api
@@ -230,14 +149,190 @@ export const uploadDataset = (formData: FormData) =>
     }>("/datasets/upload", formData, { headers: { "Content-Type": "multipart/form-data" } })
     .then((r) => r.data);
 
-    export const predict = (
-      sessionId: string,
-      inputData: Record<string, any>,
-    ) =>
-      api
-        .post<{
-          prediction: number | string;
-          confidence: number | null;
-          model_used: string;
-        }>(`/sessions/${sessionId}/predict`, { input_data: inputData })
-        .then((r) => r.data);
+// ─── EDA ──────────────────────────────────────────────────────────────────────
+
+export const getDistributions = (datasetId: string) =>
+  api
+    .get<EDADistributions>(`/eda/${datasetId}/distributions`)
+    .then((r) => r.data);
+
+export const getCorrelation = (datasetId: string) =>
+  api.get<EDACorrelation>(`/eda/${datasetId}/correlation`).then((r) => r.data);
+
+export const getTargetAnalysis = (datasetId: string) =>
+  api
+    .get<EDATargetAnalysis>(`/eda/${datasetId}/target-analysis`)
+    .then((r) => r.data);
+
+// ─── SESSIONS ─────────────────────────────────────────────────────────────────
+
+export const createSession = (datasetId: string) =>
+  api
+    .post<Session>("/sessions/", { dataset_id: datasetId })
+    .then((r) => r.data);
+
+export const getSession = (sessionId: string) =>
+  api.get<Session>(`/sessions/${sessionId}`).then((r) => r.data);
+
+// ─── STEPS ────────────────────────────────────────────────────────────────────
+
+export const runStep = (
+  sessionId: string,
+  step: string,
+  technique: string,
+  params: Record<string, any> = {},
+) => {
+  const STEP_ROUTES: Record<string, string> = {
+    missing: "missing",
+    outliers: "outliers",
+    features: "features",
+    encoding: "encoding",
+    selection: "selection",
+    pca: "pca",
+    scaling: "scaling",
+  };
+  const route = STEP_ROUTES[step] || step;
+  return api
+    .post<StepResponse>(`/sessions/${sessionId}/steps/${route}`, {
+      technique,
+      params,
+    })
+    .then((r) => r.data);
+};
+
+// ─── TRAINING ─────────────────────────────────────────────────────────────────
+
+export const trainModel = (
+  sessionId: string,
+  modelName: string,
+  params: Record<string, any> = {},
+  testSize = 0.2,
+) =>
+  api
+    .post<TrainResponse>(`/sessions/${sessionId}/train`, {
+      model_name: modelName,
+      params,
+      test_size: testSize,
+    })
+    .then((r) => r.data);
+
+export const tuneModel = (
+  sessionId: string,
+  modelName: string,
+  testSize = 0.2,
+) =>
+  api
+    .post<TrainResponse>(`/sessions/${sessionId}/tune`, {
+      model_name: modelName,
+      params: {},
+      test_size: testSize,
+    })
+    .then((r) => r.data);
+
+export const gridSearch = (sessionId: string, testSize = 0.2) =>
+  api
+    .post<TrainResponse>(`/sessions/${sessionId}/gridsearch`, {
+      model_name: "random_forest",
+      params: {},
+      test_size: testSize,
+    })
+    .then((r) => r.data);
+
+export const getRuns = (sessionId: string) =>
+  api.get<RunRecord[]>(`/sessions/${sessionId}/runs`).then((r) => r.data);
+
+// ─── RESET STEP ───────────────────────────────────────────────────────────────
+
+export const resetStep = (sessionId: string, stepName: string) =>
+  api
+    .post<{ message: string; pipeline_state: Record<string, any> }>(
+      `/sessions/${sessionId}/steps/${stepName}/reset`
+    )
+    .then((r) => r.data);
+
+// ─── SAVE / SHARE ─────────────────────────────────────────────────────────────
+
+export const saveSession = (sessionId: string, name: string) =>
+  api
+    .post<{ message: string; name: string }>(`/sessions/${sessionId}/save`, { name })
+    .then((r) => r.data);
+
+export const shareSession = (sessionId: string) =>
+  api
+    .post<{ share_token: string; share_url: string }>(`/sessions/${sessionId}/share`)
+    .then((r) => r.data);
+
+export const getSharedSession = (shareToken: string) =>
+  api
+    .get<{
+      id: string;
+      dataset_id: string;
+      task_type: string;
+      current_step: number;
+      pipeline_state: Record<string, any>;
+      name: string;
+      created_at: string;
+    }>(`/sessions/shared/${shareToken}`)
+    .then((r) => r.data);
+
+export const importSession = (sessionData: {
+  dataset_id: string;
+  task_type?: string;
+  pipeline_state: Record<string, any>;
+  name?: string;
+}) =>
+  api
+    .post<{
+      id: string;
+      dataset_id: string;
+      task_type: string;
+      message: string;
+    }>(`/sessions/import`, sessionData)
+    .then((r) => r.data);
+
+// ─── APPLY AUTOML ─────────────────────────────────────────────────────────────
+
+export const applyAutoML = (sessionId: string, jobId: string) =>
+  api
+    .post<TrainResponse>(`/sessions/${sessionId}/apply-automl`, {
+      job_id: jobId,
+    })
+    .then((r) => r.data);
+
+// ─── PREDICT ──────────────────────────────────────────────────────────────────
+
+export const predict = (sessionId: string, inputData: Record<string, any>) =>
+  api
+    .post<{
+      prediction: number | string;
+      confidence: number | null;
+      model_used: string;
+    }>(`/sessions/${sessionId}/predict`, { input_data: inputData })
+    .then((r) => r.data);
+
+// ─── AUTOML ───────────────────────────────────────────────────────────────────
+
+// AutoML tab — file upload
+export const runAutoML = (formData: FormData) =>
+  api
+    .post<{
+      job_id: string;
+      status: string;
+      columns: string[];
+    }>("/automl/run", formData, { headers: { "Content-Type": "multipart/form-data" } })
+    .then((r) => r.data);
+
+// Dataset cards — runs AutoML on already-stored dataset
+export const runAutoMLForDataset = (datasetId: string, targetCol = "") =>
+  api
+    .post<{
+      job_id: string;
+      status: string;
+      dataset: string;
+      target: string;
+    }>("/automl/run-for-dataset", null, { params: { dataset_id: datasetId, target_col: targetCol } })
+    .then((r) => r.data);
+
+// Poll job status
+export const getAutoMLStatus = (jobId: string) =>
+  api.get<AutoMLStatus>(`/automl/status/${jobId}`).then((r) => r.data);

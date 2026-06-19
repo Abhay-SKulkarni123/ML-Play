@@ -1,22 +1,22 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
-import {
-    getSession, getProfile, getDistributions, getCorrelation, getTargetAnalysis,
-    getRuns, runStep, trainModel, tuneModel, gridSearch,
-    Session, DatasetProfile, StepResponse, TrainResponse,
-    EDADistributions, EDACorrelation, EDATargetAnalysis, RunRecord,
-    getDatasets,
-} from "@/lib/api";
+    import {
+        getSession, getProfile, getDistributions, getCorrelation, getTargetAnalysis,
+        getRuns, runStep, trainModel, tuneModel, gridSearch, resetStep,
+        Session, DatasetProfile, StepResponse, TrainResponse,
+        EDADistributions, EDACorrelation, EDATargetAnalysis, RunRecord,
+        getDatasets, AutoMLStatus,
+    } from "@/lib/api";
 import {
     BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
     LineChart, Line, RadarChart, Radar, PolarGrid, PolarAngleAxis,
-    AreaChart, Area,
+    AreaChart, Area, PieChart, Pie, Legend,
 } from "recharts";
 import {
     Loader2, CheckCircle2, Circle, ChevronRight,
     Sparkles, AlertTriangle, Download, TrendingUp,
-    ArrowRight, RotateCcw, GitCompare,
+    ArrowRight, RotateCcw, GitCompare, Share2, Home,
 } from "lucide-react";
 
 // ─── LABEL MAP ────────────────────────────────────────────────────────────────
@@ -166,6 +166,28 @@ const STATS_KEYS = [
     "components", "total_variance_retained",
 ];
 
+// Helper function to normalize technique names for deduplication
+// Backend may return either the value ("mean") or label ("Mean Imputation")
+function getTechniqueValue(technique: string, TECHNIQUES: Record<string, { value: string; label: string }[]>): string {
+    if (!technique) return "";
+    
+    const techniqueLower = technique.toLowerCase().trim();
+    
+    // Search through all technique categories
+    for (const techniques of Object.values(TECHNIQUES)) {
+        // Try to match by value (case-insensitive)
+        const byValue = techniques.find(t => t.value.toLowerCase() === techniqueLower);
+        if (byValue) return byValue.value;
+        
+        // Try to match by label (case-insensitive)
+        const byLabel = techniques.find(t => t.label.toLowerCase() === techniqueLower);
+        if (byLabel) return byLabel.value;
+    }
+    
+    // Fallback: return as-is but normalized
+    return techniqueLower;
+}
+
 const TOOLTIP_STYLE = {
     background: "#0f172a",
     border: "1px solid #1e293b",
@@ -290,6 +312,23 @@ export default function PlaygroundPage() {
     const [trainParams, setTrainParams] = useState<Record<string, any>>({});
 
     const [datasetName, setDatasetName] = useState<string>("");
+    const [saving, setSaving] = useState(false);
+    const [sharing, setSharing] = useState(false);
+    const [shareUrl, setShareUrl] = useState<string | null>(null);
+    const [showSaveDialog, setShowSaveDialog] = useState(false);
+    const [saveName, setSaveName] = useState("");
+
+    // Simple ref to track latest results for display
+    const resultsRef = useRef<Record<string, StepResponse[]>>({});
+    resultsRef.current = results;
+    // CRITICAL: Synchronous guard against rapid double-clicks
+    const applyingRef = useRef(false);
+    
+    // AutoML polling
+    const [automlJobId, setAutomlJobId] = useState<string | null>(null);
+    const [automlStatus, setAutomlStatus] = useState<AutoMLStatus | null>(null);
+    const automlPollRef = useRef<NodeJS.Timeout | null>(null);
+    const [applyingAutoml, setApplyingAutoml] = useState(false);
 
     useEffect(() => {
         if (!sessionId) return;
@@ -303,6 +342,12 @@ export default function PlaygroundPage() {
             });
             return getProfile(s.dataset_id);
         }).then(setProfile);
+        
+        // Check for AutoML job
+        const jobId = localStorage.getItem("ml_last_automl_job");
+        if (jobId) {
+            setAutomlJobId(jobId);
+        }
     }, [sessionId]);
 
     useEffect(() => {
@@ -320,14 +365,69 @@ export default function PlaygroundPage() {
         if (!session || activeStep !== 13) return;
         getRuns(session.id).then(setRuns);
     }, [activeStep, session]);
+    
+    // Poll AutoML status and apply when done
+    useEffect(() => {
+        if (!automlJobId || !session) return;
+        
+        const pollStatus = async () => {
+            try {
+                const { getAutoMLStatus, applyAutoML } = await import("@/lib/api");
+                const status = await getAutoMLStatus(automlJobId);
+                setAutomlStatus(status);
+                
+                if (status.status === "done" && !applyingAutoml) {
+                    setApplyingAutoml(true);
+                    try {
+                        const trainResult = await applyAutoML(session.id, automlJobId);
+                        localStorage.removeItem("ml_last_automl_job");
+                        setAutomlJobId(null);
+                        // Set the training result so PredictView has a model to use
+                        setTrainResults([trainResult]);
+                        // Mark tuning as complete too (use train result as tune result)
+                        setTuneResult(trainResult);
+                        // Navigate to final step
+                        setActiveStep(14);
+                    } catch (e: any) {
+                        console.error("Failed to apply AutoML:", e.message);
+                        alert("AutoML completed but failed to apply: " + e.message);
+                    } finally {
+                        setApplyingAutoml(false);
+                    }
+                } else if (status.status === "error") {
+                    alert("AutoML failed: " + (status.error || "Unknown error"));
+                    localStorage.removeItem("ml_last_automl_job");
+                    setAutomlJobId(null);
+                }
+            } catch (e: any) {
+                console.error("AutoML poll error:", e.message);
+            }
+        };
+        
+        pollStatus();
+        automlPollRef.current = setInterval(pollStatus, 2000);
+        
+        return () => {
+            if (automlPollRef.current) {
+                clearInterval(automlPollRef.current);
+            }
+        };
+    }, [automlJobId, session, applyingAutoml]);
 
     async function apply(stepKey: string) {
-        if (!session) return;
+        // SYNCHRONOUS guard — prevents ANY concurrent calls regardless of React state timing
+        if (applyingRef.current) return;
+        applyingRef.current = true;
+        
+        if (!session) {
+            applyingRef.current = false;
+            return;
+        }
         setLoading(stepKey);
         try {
             if (stepKey === "train") {
                 const model = selected["train"] || "random_forest";
-                const res = await trainModel(session.id, model, modelParams);
+                const res = await trainModel(session.id, model, trainParams);
                 setTrainResults(prev => [res, ...prev]);
             } else if (stepKey === "tune") {
                 const model = selected["tune_model"] || "random_forest";
@@ -337,25 +437,87 @@ export default function PlaygroundPage() {
                     : await tuneModel(session.id, model);
                 setTuneResult(res);
             } else {
-                // CRITICAL FIX: always read the CURRENT selected value fresh, never cache
+                // Get the currently selected technique for this step
                 const currentTechniques = TECHNIQUES[stepKey] || [];
-                const tech = selected[stepKey] ?? currentTechniques[0]?.value;
+                const currentSelection = selected[stepKey];
+                const tech = currentSelection || currentTechniques[0]?.value;
                 const techObj = currentTechniques.find(t => t.value === tech);
                 const params = { ...(techObj?.params || {}) };
 
-                console.log(`[apply] step=${stepKey} technique=${tech}`); // TEMP DEBUG — remove after confirming fix
-
+                // Backend now handles dedup: returns cached result if same technique was used
                 const res = await runStep(session.id, stepKey, tech, params);
-                setStepResults(prev => ({
-                    ...prev,
-                    [stepKey]: [res, ...(prev[stepKey] || [])],
-                }));
-            }
-            if (stepKey !== "tune") {
-                setActiveStep(s => Math.min(s + 1, STEPS.length));
+                const appliedTechnique = res.technique || tech;
+                setSelected(s => ({ ...s, [stepKey]: appliedTechnique }));
+                
+                // Add to results list (backend ensures no duplicate techniques)
+                setResults(prev => {
+                    const existing = prev[stepKey] || [];
+                    // Only add if not already in list (backend dedup + frontend safety)
+                    const alreadyExists = existing.some(r => r.technique === appliedTechnique);
+                    if (alreadyExists) return prev;
+                    return { ...prev, [stepKey]: [res, ...existing] };
+                });
+                // Stay on same step - don't auto-advance
             }
         } catch (e: any) { console.error(e.message); }
-        finally { setLoading(null); }
+        finally { 
+            setLoading(null);
+            applyingRef.current = false; 
+        }
+    }
+
+    // Reset current step and all subsequent steps
+    async function handleResetStep(stepKey: string) {
+        if (!session) return;
+        if (!confirm("Reset this step and all subsequent steps? This will clear all results from this point forward.")) return;
+        
+        setLoading(stepKey);
+        try {
+            // Map step keys to backend step names
+            const stepNameMap: Record<string, string> = {
+                missing: "missing_values",
+                outliers: "outliers",
+                features: "feature_engineering",
+                encoding: "encoding",
+                selection: "feature_selection",
+                scaling: "scaling",
+                pca: "pca",
+            };
+            
+            const backendStepName = stepNameMap[stepKey];
+            if (!backendStepName) return;
+            
+            await resetStep(session.id, backendStepName);
+            
+            // Clear local results for this step and all subsequent steps
+            const stepOrder = ["missing", "outliers", "features", "encoding", "selection", "scaling", "pca", "train", "tune"];
+            const currentIdx = stepOrder.indexOf(stepKey);
+            
+            setResults(prev => {
+                const next = { ...prev };
+                for (let i = currentIdx; i < stepOrder.length; i++) {
+                    delete next[stepOrder[i]];
+                }
+                return next;
+            });
+            
+            // Clear train/tune results if resetting those steps
+            if (stepKey === "train") setTrainResults([]);
+            if (stepKey === "tune") setTuneResult(null);
+            
+            // Reset selection for this step
+            setSelected(prev => {
+                const next = { ...prev };
+                delete next[stepKey];
+                return next;
+            });
+            
+        } catch (e: any) {
+            console.error("Reset failed:", e.message);
+            alert("Reset failed: " + e.message);
+        } finally {
+            setLoading(null);
+        }
     }
 
     function advance() {
@@ -373,6 +535,41 @@ export default function PlaygroundPage() {
         a.click();
     }
 
+    async function handleSave() {
+        if (!session) return;
+        setSaving(true);
+        try {
+            const { saveSession } = await import("@/lib/api");
+            await saveSession(session.id, saveName || datasetName);
+            setShowSaveDialog(false);
+            setSaveName("");
+            alert("Session saved successfully!");
+        } catch (e: any) {
+            console.error("Save failed:", e.message);
+            alert("Save failed: " + e.message);
+        } finally {
+            setSaving(false);
+        }
+    }
+
+    async function handleShare() {
+        if (!session) return;
+        setSharing(true);
+        try {
+            const { shareSession } = await import("@/lib/api");
+            const result = await shareSession(session.id);
+            const url = window.location.origin + result.share_url;
+            setShareUrl(url);
+            await navigator.clipboard.writeText(url);
+            alert("Share link copied to clipboard!");
+        } catch (e: any) {
+            console.error("Share failed:", e.message);
+            alert("Share failed: " + e.message);
+        } finally {
+            setSharing(false);
+        }
+    }
+
     if (!session || !profile) return (
         <div className="min-h-screen bg-slate-950 flex items-center justify-center">
             <Loader2 className="w-6 h-6 animate-spin text-blue-400" />
@@ -384,16 +581,29 @@ export default function PlaygroundPage() {
     const latestResult = stepResultsList[0];
     const prevResult = stepResultsList[1];
     const latestTrain = trainResults[0];
+    const finalModel = tuneResult || latestTrain;
     const regModels = ["ridge", "lasso", "elasticnet", "svr"];
+    
+    // Show AutoML progress if running
+    const showAutoMLProgress = automlJobId && automlStatus?.status === "running";
 
     return (
         <div className="h-screen bg-slate-950 flex flex-col overflow-hidden">
 
             {/* Top bar */}
             <header className="h-11 bg-slate-900 border-b border-slate-800 flex items-center px-4 gap-3 flex-shrink-0">
-                <button onClick={() => router.push("/")} className="text-xs text-slate-500 hover:text-white transition-colors font-medium">
-                    ← Back
+                <button onClick={() => router.push("/")} className="text-xs text-slate-500 hover:text-white transition-colors font-medium flex items-center gap-1">
+                    <Home className="w-3.5 h-3.5" /> Home
                 </button>
+                {showAutoMLProgress && (
+                    <>
+                        <div className="w-px h-3.5 bg-slate-800" />
+                        <div className="flex items-center gap-2">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" />
+                            <span className="text-xs text-blue-400 font-medium">AutoML running... {automlStatus?.progress}%</span>
+                        </div>
+                    </>
+                )}
                 <div className="w-px h-3.5 bg-slate-800" />
                 <span className="text-xs font-semibold text-white">ML Playground</span>
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
@@ -404,9 +614,33 @@ export default function PlaygroundPage() {
                             : "bg-amber-500/10 text-amber-400"}`}>
                         {session.task_type === "classification" ? "Classification" : "Regression"}
                     </span>
+                    <button onClick={() => setShowSaveDialog(true)}
+                        className="text-xs px-2.5 py-1 rounded-md bg-slate-800 text-slate-400 border border-slate-700 hover:text-white hover:border-slate-600 transition-colors font-medium flex items-center gap-1">
+                        <Download className="w-3 h-3" /> Save
+                    </button>
+                    <button onClick={handleShare}
+                        disabled={sharing}
+                        className="text-xs px-2.5 py-1 rounded-md bg-blue-600 text-white border border-blue-500 hover:bg-blue-500 transition-colors font-medium flex items-center gap-1 disabled:opacity-40">
+                        {sharing ? <><Loader2 className="w-3 h-3 animate-spin" />Sharing...</> : <><Share2 className="w-3 h-3" />Share</>}
+                    </button>
+                    {shareUrl && (
+                        <div className="flex items-center gap-2">
+                            <input
+                                type="text"
+                                value={shareUrl}
+                                readOnly
+                                className="text-xs bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-300 w-48"
+                            />
+                            <button
+                                onClick={() => navigator.clipboard.writeText(shareUrl)}
+                                className="text-xs px-2 py-1 bg-slate-700 text-slate-300 rounded hover:bg-slate-600">
+                                Copy
+                            </button>
+                        </div>
+                    )}
                     <button onClick={exportCode}
                         className="text-xs px-2.5 py-1 rounded-md bg-slate-800 text-slate-400 border border-slate-700 hover:text-white hover:border-slate-600 transition-colors font-medium flex items-center gap-1">
-                        <Download className="w-3 h-3" /> Export
+                        <Download className="w-3 h-3" /> Export Code
                     </button>
                 </div>
             </header>
@@ -420,15 +654,18 @@ export default function PlaygroundPage() {
                             Lifecycle
                         </p>
                         <nav className="space-y-0.5">
-                            {STEPS.map(step => {
+                    {STEPS.map(step => {
+                                // AutoML complete: all steps are done
+                                const autoMLComplete = activeStep === 14 && (trainResults.length > 0 || !!tuneResult);
                                 const readOnly = ["profile", "eda"].includes(step.key);
-                                const done = readOnly
-                                    ? activeStep > step.id
-                                    : step.key === "train"
-                                        ? trainResults.length > 0
-                                        : step.key === "tune"
-                                            ? !!tuneResult
-                                            : (results[step.key]?.length ?? 0) > 0;
+                                const done = autoMLComplete ? true
+                                    : readOnly
+                                        ? activeStep > step.id
+                                        : step.key === "train"
+                                            ? trainResults.length > 0
+                                            : step.key === "tune"
+                                                ? !!tuneResult
+                                                : (results[step.key]?.length ?? 0) > 0;
                                 const active = activeStep === step.id;
 
                                 return (
@@ -517,24 +754,25 @@ export default function PlaygroundPage() {
                             />
                         )}
 
-                        {activeStep >= 3 && activeStep <= 9 && currentStep?.action && (() => {
-                            const techs = TECHNIQUES[currentStep.key] || [];
-                            const sel = selected[currentStep.key] || techs[0]?.value;
-                            return (
-                                <StepView
-                                    step={currentStep}
-                                    techniques={techs}
-                                    selected={sel}
-                                    onSelect={v => setSelected(s => ({ ...s, [currentStep.key]: v }))}
-                                    onApply={() => apply(currentStep.key)}
-                                    loading={loading === currentStep.key}
-                                    latestResult={latestResult}
-                                    prevResult={prevResult}
-                                    profile={profile}
-                                    onNext={advance}
-                                />
-                            );
-                        })()}
+                        {activeStep >= 3 && activeStep <= 9 && currentStep?.action && (
+                            <StepView
+                                step={currentStep}
+                                techniques={TECHNIQUES[currentStep.key] || []}
+                                selected={selected[currentStep.key] || (TECHNIQUES[currentStep.key] || [])[0]?.value || ""}
+                                onSelect={v => setSelected(s => ({ ...s, [currentStep.key]: v }))}
+                                onApply={() => apply(currentStep.key)}
+                                loading={loading === currentStep.key}
+                                latestResult={results[currentStep.key]?.[0]}
+                                allResults={results[currentStep.key] || []}
+                                profile={profile}
+                                onNext={advance}
+                                onChooseAlternative={(tech) => {
+                                    setSelected(s => ({ ...s, [currentStep.key]: tech }));
+                                    handleResetStep(currentStep.key);
+                                }}
+                                distributions={distributions}
+                            />
+                        )}
 
                         {activeStep === 10 && (
                             <TrainView
@@ -611,6 +849,16 @@ export default function PlaygroundPage() {
                     trainResult={tuneResult || latestTrain}
                 />
             </div>
+
+            {/* Save Dialog */}
+            <SaveDialog
+                show={showSaveDialog}
+                onClose={() => setShowSaveDialog(false)}
+                onSave={handleSave}
+                saving={saving}
+                name={saveName}
+                onNameChange={setSaveName}
+            />
         </div>
     );
 }
@@ -923,7 +1171,7 @@ function CorrelationHeatmap({ correlation }: { correlation: EDACorrelation }) {
 // ─── STEP VIEW ────────────────────────────────────────────────────────────────
 
 function StepView({ step, techniques, selected, onSelect, onApply, loading,
-    latestResult, prevResult, profile, onNext }: {
+    latestResult, prevResult, profile, onNext, allResults = [], onChooseAlternative, distributions }: {
         step: { id: number; key: string; label: string };
         techniques: { value: string; label: string; desc: string }[];
         selected: string;
@@ -934,6 +1182,9 @@ function StepView({ step, techniques, selected, onSelect, onApply, loading,
         prevResult?: StepResponse;
         profile: DatasetProfile;
         onNext: () => void;
+        allResults?: StepResponse[];
+        onChooseAlternative?: (tech: string) => void;
+        distributions?: EDADistributions | null;
     }) {
     const selectedTech = techniques.find(t => t.value === selected);
 
@@ -955,12 +1206,30 @@ function StepView({ step, techniques, selected, onSelect, onApply, loading,
                 ))}
             </div>
 
-            {/* Before/after for missing values */}
+            {/* Live previews — show effect of selected technique before applying */}
             {step.key === "missing" && (
                 <BeforeAfterMissing profile={profile} technique={selected} />
             )}
+            {step.key === "outliers" && (
+                <BeforeAfterOutliers profile={profile} technique={selected} />
+            )}
+            {step.key === "features" && (
+                <BeforeAfterFeatures profile={profile} technique={selected} />
+            )}
+            {step.key === "encoding" && (
+                <BeforeAfterEncoding profile={profile} technique={selected} />
+            )}
+            {step.key === "selection" && (
+                <BeforeAfterSelection profile={profile} technique={selected} />
+            )}
+            {step.key === "pca" && (
+                <BeforeAfterPCA profile={profile} technique={selected} />
+            )}
+            {step.key === "scaling" && (
+                <BeforeAfterScaling profile={profile} technique={selected} />
+            )}
 
-            {/* Apply button */}
+            {/* Action buttons */}
             <div className="flex items-center gap-3">
                 <button onClick={onApply} disabled={!!loading}
                     className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500
@@ -970,41 +1239,84 @@ function StepView({ step, techniques, selected, onSelect, onApply, loading,
                         : `Apply ${selectedTech?.label ?? selected}`}
                 </button>
                 {latestResult && (
-                    <button onClick={onApply} disabled={!!loading}
-                        className="flex items-center gap-2 px-4 py-2.5 text-slate-400
-              hover:text-white border border-slate-700 hover:border-slate-600
-              text-sm font-medium rounded-xl transition-colors">
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        Try Another
-                    </button>
-                )}
-                {latestResult && (
                     <button onClick={onNext}
                         className="flex items-center gap-2 px-4 py-2.5 text-emerald-400
               hover:text-emerald-300 border border-emerald-500/30 hover:border-emerald-500/50
-              text-sm font-medium rounded-xl transition-colors ml-auto">
+              text-sm font-medium rounded-xl transition-colors">
                         Next Step <ArrowRight className="w-3.5 h-3.5" />
                     </button>
                 )}
             </div>
 
-            {/* Results — side by side if two exist */}
-            {latestResult && (
-                <div className={`grid gap-4 ${prevResult ? "grid-cols-2" : "grid-cols-1"}`}>
-                    <ResultCard result={latestResult} label="Current" highlight />
-                    {prevResult && <ResultCard result={prevResult} label="Previous" />}
+            {/* Results — show all alternatives in grid */}
+            {allResults.length > 0 && (
+                <div className="space-y-3">
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                        All Alternatives ({allResults.length})
+                    </p>
+                    <div className={`grid gap-3 ${allResults.length === 1 ? "grid-cols-1" : allResults.length === 2 ? "grid-cols-2" : "grid-cols-3"}`}>
+                        {allResults.slice(0, 9).map((result, idx) => (
+                            <ResultCard 
+                                key={idx} 
+                                result={result} 
+                                label={idx === 0 ? "Current" : `Alternative ${idx}`} 
+                                highlight={idx === 0}
+                                onChooseAlternative={() => {
+                                    if (idx > 0 && onChooseAlternative) {
+                                        onChooseAlternative(result.technique);
+                                    }
+                                }}
+                            />
+                        ))}
+                    </div>
                 </div>
             )}
         </div>
     );
 }
 
+// ─── SAVE DIALOG MODAL ────────────────────────────────────────────────────────
+
+function SaveDialog({ show, onClose, onSave, saving, name, onNameChange }: {
+    show: boolean;
+    onClose: () => void;
+    onSave: () => void;
+    saving: boolean;
+    name: string;
+    onNameChange: (v: string) => void;
+}) {
+    if (!show) return null;
+    return (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+            <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
+                <h3 className="text-lg font-semibold text-white mb-2">Save Session</h3>
+                <p className="text-xs text-slate-500 mb-4">Give your ML pipeline a name to save it for later.</p>
+                <input
+                    type="text"
+                    value={name}
+                    onChange={e => onNameChange(e.target.value)}
+                    placeholder="My ML Pipeline"
+                    className="w-full text-sm bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 mb-4"
+                    autoFocus
+                />
+                <div className="flex items-center gap-3 justify-end">
+                    <button onClick={onClose} className="px-4 py-2 text-xs text-slate-400 hover:text-white transition-colors font-medium">Cancel</button>
+                    <button onClick={onSave} disabled={saving || !name.trim()} className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm font-semibold rounded-lg transition-colors">
+                        {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin inline mr-1" />Saving...</> : "Save Session"}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 // ─── RESULT CARD ──────────────────────────────────────────────────────────────
 
-function ResultCard({ result, label: cardLabel, highlight }: {
+function ResultCard({ result, label: cardLabel, highlight, onChooseAlternative }: {
     result: StepResponse;
     label: string;
     highlight?: boolean;
+    onChooseAlternative?: () => void;
 }) {
     const techLabel = Object.values(TECHNIQUES).flat().find(t => t.value === result.technique)?.label || result.technique;
 
@@ -1065,6 +1377,19 @@ function ResultCard({ result, label: cardLabel, highlight }: {
                         ))}
                 </div>
             </div>
+            
+            {/* Choose Alternative button */}
+            {!highlight && onChooseAlternative && (
+                <div className="px-4 py-3 border-t border-slate-800/50">
+                    <button 
+                        onClick={onChooseAlternative}
+                        className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-medium rounded-lg transition-colors"
+                    >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        Choose This Alternative
+                    </button>
+                </div>
+            )}
         </div>
     );
 }
@@ -1132,6 +1457,308 @@ function BeforeAfterMissing({ profile, technique }: { profile: DatasetProfile; t
                     </div>
                 ))}
             </div>
+        </div>
+    );
+}
+
+// ─── BEFORE / AFTER OUTLIERS ──────────────────────────────────────────────────
+
+function BeforeAfterOutliers({ profile, technique }: { profile: DatasetProfile; technique: string }) {
+    const numericCols = profile.columns.filter(c => c.type === "numeric" && c.stats).slice(0, 2);
+    if (!numericCols.length) return null;
+
+    const techLabel = TECHNIQUES.outliers.find(t => t.value === technique)?.label || technique;
+
+    return (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <p className="text-sm font-semibold text-white mb-1">Preview — Effect of {techLabel}</p>
+            <p className="text-xs text-slate-500 mb-4">Showing numeric columns that may contain outliers</p>
+            <div className="space-y-4">
+                {numericCols.map(col => {
+                    const mean = col.stats?.mean ?? 0;
+                    const std = col.stats?.std ?? 1;
+                    const outlierVal = (mean + 3 * std).toFixed(2);
+                    const cappedVal = (mean + 1.5 * std).toFixed(2);
+                    return (
+                        <div key={col.name}>
+                            <p className="text-sm font-mono text-slate-300 mb-2">
+                                {col.name}
+                                <span className="text-slate-500 font-sans text-xs ml-2">μ={mean.toFixed(1)}, σ={std.toFixed(1)}</span>
+                            </p>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <p className="text-xs font-semibold text-slate-500 mb-2 uppercase">Before (extreme value)</p>
+                                    <div className="space-y-1.5">
+                                        <div className="px-3 py-2 rounded-lg text-sm font-mono bg-slate-800 text-slate-300">{mean.toFixed(2)}</div>
+                                        <div className="px-3 py-2 rounded-lg text-sm font-mono bg-red-500/10 text-red-400 border border-red-500/20">{outlierVal} ← outlier</div>
+                                        <div className="px-3 py-2 rounded-lg text-sm font-mono bg-slate-800 text-slate-300">{mean.toFixed(2)}</div>
+                                    </div>
+                                </div>
+                                <div>
+                                    <p className="text-xs font-semibold text-slate-500 mb-2 uppercase">After treatment</p>
+                                    <div className="space-y-1.5">
+                                        <div className="px-3 py-2 rounded-lg text-sm font-mono bg-slate-800 text-slate-300">{mean.toFixed(2)}</div>
+                                        <div className="px-3 py-2 rounded-lg text-sm font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">{cappedVal} ← capped</div>
+                                        <div className="px-3 py-2 rounded-lg text-sm font-mono bg-slate-800 text-slate-300">{mean.toFixed(2)}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+            {technique === "keep" && (
+                <div className="mt-3 text-xs text-amber-400 bg-amber-500/5 border border-amber-500/20 rounded-lg px-3 py-2">
+                    No transformation applied. Outliers will be documented in statistics only.
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ─── BEFORE / AFTER ENCODING ──────────────────────────────────────────────────
+
+function BeforeAfterEncoding({ profile, technique }: { profile: DatasetProfile; technique: string }) {
+    const catCols = profile.columns.filter(c => c.type === "categorical").slice(0, 2);
+    if (!catCols.length) return null;
+
+    const techLabel = TECHNIQUES.encoding.find(t => t.value === technique)?.label || technique;
+    const sampleVals = catCols.map(c => c.unique_count > 0 ? ["A", "B", "C"].slice(0, Math.min(3, c.unique_count)) : ["A", "B", "C"]);
+
+    function afterLabel(tech: string, val: string, idx: number) {
+        if (tech === "onehot") return `[${val}=1]`;
+        if (tech === "label") return String(idx);
+        if (tech === "ordinal") return String(idx + 1);
+        if (tech === "frequency") return "0.35";
+        if (tech === "target") return "0.72";
+        return val;
+    }
+
+    return (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <p className="text-sm font-semibold text-white mb-1">Preview — Effect of {techLabel}</p>
+            <p className="text-xs text-slate-500 mb-4">Showing categorical columns</p>
+            <div className="space-y-4">
+                {catCols.map((col, i) => (
+                    <div key={col.name}>
+                        <p className="text-sm font-mono text-slate-300 mb-2">
+                            {col.name}
+                            <span className="text-slate-500 font-sans text-xs ml-2">{col.unique_count} categories</span>
+                        </p>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <p className="text-xs font-semibold text-slate-500 mb-2 uppercase">Before (raw values)</p>
+                                <div className="space-y-1.5">
+                                    {sampleVals[i].map((v, j) => (
+                                        <div key={j} className="px-3 py-2 rounded-lg text-sm font-mono bg-slate-800 text-slate-300">{v}</div>
+                                    ))}
+                                </div>
+                            </div>
+                            <div>
+                                <p className="text-xs font-semibold text-slate-500 mb-2 uppercase">After ({techLabel})</p>
+                                <div className="space-y-1.5">
+                                    {sampleVals[i].map((v, j) => (
+                                        <div key={j} className="px-3 py-2 rounded-lg text-sm font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                            {afterLabel(technique, v, j)}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                ))}
+            </div>
+            {technique === "onehot" && (
+                <div className="mt-3 text-xs text-blue-400 bg-blue-500/5 border border-blue-500/20 rounded-lg px-3 py-2">
+                    One-Hot Encoding will create {catCols.reduce((sum, c) => sum + c.unique_count, 0)} new binary columns.
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ─── BEFORE / AFTER FEATURE SELECTION ─────────────────────────────────────────
+
+function BeforeAfterSelection({ profile, technique }: { profile: DatasetProfile; technique: string }) {
+    const allCols = profile.columns.filter(c => !c.is_target);
+    const nAll = allCols.length;
+    const techLabel = TECHNIQUES.selection.find(t => t.value === technique)?.label || technique;
+
+    let nKept = nAll;
+    if (technique === "variance_threshold") nKept = Math.max(1, Math.floor(nAll * 0.8));
+    if (technique === "correlation") nKept = Math.max(1, Math.floor(nAll * 0.7));
+    if (technique === "mutual_info") nKept = Math.min(10, nAll);
+    const nDropped = nAll - nKept;
+
+    return (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <p className="text-sm font-semibold text-white mb-1">Preview — Effect of {techLabel}</p>
+            <p className="text-xs text-slate-500 mb-4">Feature selection impact</p>
+            <div className="grid grid-cols-3 gap-3">
+                <div className="bg-slate-800 rounded-lg p-3 text-center">
+                    <div className="text-lg font-bold font-mono text-white">{nAll}</div>
+                    <div className="text-xs text-slate-500">Total Features</div>
+                </div>
+                <div className="bg-emerald-500/10 rounded-lg p-3 text-center border border-emerald-500/20">
+                    <div className="text-lg font-bold font-mono text-emerald-400">{nKept}</div>
+                    <div className="text-xs text-emerald-400/70">Will Keep</div>
+                </div>
+                <div className="bg-red-500/10 rounded-lg p-3 text-center border border-red-500/20">
+                    <div className="text-lg font-bold font-mono text-red-400">{nDropped}</div>
+                    <div className="text-xs text-red-400/70">Will Drop</div>
+                </div>
+            </div>
+            {technique === "none" && (
+                <div className="mt-3 text-xs text-slate-400 bg-slate-800/50 rounded-lg px-3 py-2">
+                    All {nAll} features will be passed to the model.
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ─── BEFORE / AFTER PCA ────────────────────────────────────────────────────────
+
+function BeforeAfterPCA({ profile, technique }: { profile: DatasetProfile; technique: string }) {
+    const numericCols = profile.columns.filter(c => c.type === "numeric" && !c.is_target);
+    const nFeatures = numericCols.length;
+    const techLabel = TECHNIQUES.pca.find(t => t.value === technique)?.label || technique;
+
+    let nComponents = nFeatures;
+    if (technique === "pca_auto") nComponents = Math.max(2, Math.floor(nFeatures * 0.7));
+    if (technique === "pca_fixed") nComponents = Math.min(5, nFeatures);
+    const varianceRetained = technique === "none" ? 100 : Math.round((nComponents / nFeatures) * 95);
+
+    return (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <p className="text-sm font-semibold text-white mb-1">Preview — Effect of {techLabel}</p>
+            <p className="text-xs text-slate-500 mb-4">Dimensionality reduction impact</p>
+            <div className="grid grid-cols-3 gap-3">
+                <div className="bg-slate-800 rounded-lg p-3 text-center">
+                    <div className="text-lg font-bold font-mono text-white">{nFeatures}</div>
+                    <div className="text-xs text-slate-500">Current Features</div>
+                </div>
+                <div className="bg-violet-500/10 rounded-lg p-3 text-center border border-violet-500/20">
+                    <div className="text-lg font-bold font-mono text-violet-400">{nComponents}</div>
+                    <div className="text-xs text-violet-400/70">PCA Components</div>
+                </div>
+                <div className="bg-blue-500/10 rounded-lg p-3 text-center border border-blue-500/20">
+                    <div className="text-lg font-bold font-mono text-blue-400">{varianceRetained}%</div>
+                    <div className="text-xs text-blue-400/70">Variance Retained</div>
+                </div>
+            </div>
+            {technique === "none" && (
+                <div className="mt-3 text-xs text-slate-400 bg-slate-800/50 rounded-lg px-3 py-2">
+                    No dimensionality reduction. All {nFeatures} features retained.
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ─── BEFORE / AFTER SCALING ────────────────────────────────────────────────────
+
+function BeforeAfterScaling({ profile, technique }: { profile: DatasetProfile; technique: string }) {
+    const numericCols = profile.columns.filter(c => c.type === "numeric" && c.stats).slice(0, 2);
+    if (!numericCols.length) return null;
+
+    const techLabel = TECHNIQUES.scaling.find(t => t.value === technique)?.label || technique;
+
+    return (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <p className="text-sm font-semibold text-white mb-1">Preview — Effect of {techLabel}</p>
+            <p className="text-xs text-slate-500 mb-4">Value ranges before and after scaling</p>
+            <div className="space-y-4">
+                {numericCols.map(col => {
+                    const mean = col.stats?.mean ?? 0;
+                    const std = col.stats?.std ?? 1;
+                    const min = col.stats?.min ?? 0;
+                    const max = col.stats?.max ?? 1;
+                    let afterMin = min, afterMax = max, afterMean = mean;
+                    if (technique === "standard") { afterMean = 0; afterMin = min - mean; afterMax = max - mean; }
+                    if (technique === "minmax") { afterMin = 0; afterMax = 1; afterMean = ((mean - min) / (max - min)); }
+                    if (technique === "robust") { afterMean = 0; }
+                    if (technique === "none") { afterMin = min; afterMax = max; afterMean = mean; }
+                    return (
+                        <div key={col.name}>
+                            <p className="text-sm font-mono text-slate-300 mb-2">{col.name}</p>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <p className="text-xs font-semibold text-slate-500 mb-2 uppercase">Before</p>
+                                    <div className="space-y-1.5">
+                                        <div className="px-3 py-2 rounded-lg text-sm font-mono bg-slate-800 text-slate-300">
+                                            range: [{min.toFixed(2)}, {max.toFixed(2)}]
+                                        </div>
+                                        <div className="px-3 py-2 rounded-lg text-sm font-mono bg-slate-800 text-slate-300">
+                                            μ={mean.toFixed(2)}, σ={std.toFixed(2)}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div>
+                                    <p className="text-xs font-semibold text-slate-500 mb-2 uppercase">After</p>
+                                    <div className="space-y-1.5">
+                                        <div className="px-3 py-2 rounded-lg text-sm font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                            range: [{afterMin.toFixed(2)}, {afterMax.toFixed(2)}]
+                                        </div>
+                                        <div className="px-3 py-2 rounded-lg text-sm font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                            μ={afterMean.toFixed(2)}, σ≈1
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+            {technique === "none" && (
+                <div className="mt-3 text-xs text-slate-400 bg-slate-800/50 rounded-lg px-3 py-2">
+                    No scaling applied. Tree models (RF, XGBoost) don't require scaling.
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ─── BEFORE / AFTER FEATURE ENGINEERING ────────────────────────────────────────
+
+function BeforeAfterFeatures({ profile, technique }: { profile: DatasetProfile; technique: string }) {
+    const numericCols = profile.columns.filter(c => c.type === "numeric" && !c.is_target);
+    const nCurrent = numericCols.length;
+    const techLabel = TECHNIQUES.features.find(t => t.value === technique)?.label || technique;
+
+    let nNew = 0;
+    if (technique === "polynomial") nNew = Math.floor(nCurrent * 1.5);
+    else if (technique === "interaction") nNew = Math.floor(nCurrent * (nCurrent - 1) / 2);
+    else if (technique === "log_features") nNew = nCurrent;
+    else if (technique === "sqrt_features") nNew = nCurrent;
+    else if (technique === "reciprocal") nNew = nCurrent;
+    else if (technique === "ratio") nNew = Math.floor(nCurrent / 2);
+    else if (technique === "binning") nNew = nCurrent * 5;
+    else nNew = 0;
+
+    return (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <p className="text-sm font-semibold text-white mb-1">Preview — Effect of {techLabel}</p>
+            <p className="text-xs text-slate-500 mb-4">Feature generation impact</p>
+            <div className="grid grid-cols-3 gap-3">
+                <div className="bg-slate-800 rounded-lg p-3 text-center">
+                    <div className="text-lg font-bold font-mono text-white">{nCurrent}</div>
+                    <div className="text-xs text-slate-500">Current Features</div>
+                </div>
+                <div className="bg-blue-500/10 rounded-lg p-3 text-center border border-blue-500/20">
+                    <div className="text-lg font-bold font-mono text-blue-400">+{nNew}</div>
+                    <div className="text-xs text-blue-400/70">New Features</div>
+                </div>
+                <div className="bg-violet-500/10 rounded-lg p-3 text-center border border-violet-500/20">
+                    <div className="text-lg font-bold font-mono text-violet-400">{nCurrent + nNew}</div>
+                    <div className="text-xs text-violet-400/70">Total After</div>
+                </div>
+            </div>
+            {technique === "none" && (
+                <div className="mt-3 text-xs text-slate-400 bg-slate-800/50 rounded-lg px-3 py-2">
+                    No feature engineering. Proceeding with {nCurrent} existing features.
+                </div>
+            )}
         </div>
     );
 }
@@ -1271,6 +1898,8 @@ function TrainView({ taskType, selected, onSelect, onParamChange, onApply, loadi
 function TrainResultCard({ result, label: cardLabel, highlight }: {
     result: TrainResponse; label: string; highlight?: boolean;
 }) {
+    const cm = result.metrics.confusion_matrix as number[][] | undefined;
+
     return (
         <div className={`rounded-xl border ${highlight ? "border-emerald-500/30 bg-emerald-500/5" : "border-slate-800 bg-slate-900"}`}>
             <div className={`px-4 py-3 border-b flex items-center justify-between ${highlight ? "border-emerald-500/20" : "border-slate-800"}`}>
@@ -1292,6 +1921,38 @@ function TrainResultCard({ result, label: cardLabel, highlight }: {
                             </div>
                         ))}
                 </div>
+
+                {/* Confusion Matrix */}
+                {cm && (
+                    <div className="mt-3">
+                        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Confusion Matrix</p>
+                        <div className="grid grid-cols-2 gap-1 max-w-[200px]">
+                            {cm.map((row, i) => (
+                                row.map((val, j) => (
+                                    <div key={`${i}-${j}`} className={`rounded-lg p-3 text-center ${
+                                        i === j
+                                            ? val > 0
+                                                ? "bg-emerald-500/15 border border-emerald-500/30"
+                                                : "bg-red-500/10 border border-red-500/20"
+                                            : "bg-slate-800/60 border border-slate-700/50"
+                                    }`}>
+                                        <div className={`text-lg font-bold font-mono ${
+                                            i === j ? "text-emerald-400" : "text-red-400"
+                                        }`}>{val}</div>
+                                        <div className="text-[10px] text-slate-500">
+                                            {i === j ? "Correct" : "Error"}
+                                        </div>
+                                    </div>
+                                ))
+                            ))}
+                        </div>
+                        <div className="flex gap-4 mt-2 text-[10px] text-slate-500">
+                            <span>Rows: Actual</span>
+                            <span>Cols: Predicted</span>
+                        </div>
+                    </div>
+                )}
+
                 {result.metrics.imbalance_warning && (
                     <div className="flex gap-2 mt-3 text-xs text-amber-400 bg-amber-500/5 border border-amber-500/20 rounded-lg p-2.5">
                         <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
@@ -1347,19 +2008,19 @@ function TuneView({ taskType, selectedModel, selectedMethod, onSelectModel,
 
                 <div>
                     <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Model to Tune</p>
-                    <div className="space-y-2">
-                        {[
-                            { value: "random_forest", label: "Random Forest" },
-                            { value: "xgboost", label: "XGBoost" },
-                        ].map(m => (
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                        {TECHNIQUES.train.map(m => (
                             <button key={m.value} onClick={() => onSelectModel(m.value)}
-                                className={`w-full text-left px-4 py-3 rounded-xl border transition-all ${selectedModel === m.value
+                                className={`w-full text-left px-4 py-2.5 rounded-xl border transition-all ${selectedModel === m.value
                                         ? "bg-slate-700/70 border-slate-500/70"
                                         : "bg-slate-900 border-slate-800 hover:border-slate-700"}`}>
                                 <div className={`text-sm font-semibold ${selectedModel === m.value ? "text-white" : "text-slate-300"}`}>{m.label}</div>
                             </button>
                         ))}
                     </div>
+                    <p className="text-xs text-slate-500 mt-2">
+                        Training model: <span className="text-slate-300 font-mono">{selectedModel}</span>
+                    </p>
                 </div>
             </div>
 

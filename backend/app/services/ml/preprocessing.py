@@ -25,23 +25,23 @@ def handle_missing(df: pd.DataFrame, technique: str, params: dict) -> PipelineSt
     def fill_cats(frame):
         for col in cat_cols:
             mode = frame[col].mode()
-            frame[col].fillna(mode[0] if not mode.empty else "missing", inplace=True)
+            frame[col] = frame[col].fillna(mode[0] if not mode.empty else "missing")
 
     if technique == "mean":
         for col in numeric_cols:
-            df_out[col].fillna(df_out[col].mean(), inplace=True)
+            df_out[col] = df_out[col].fillna(df_out[col].mean())
         fill_cats(df_out)
 
     elif technique == "median":
         for col in numeric_cols:
-            df_out[col].fillna(df_out[col].median(), inplace=True)
+            df_out[col] = df_out[col].fillna(df_out[col].median())
         fill_cats(df_out)
 
     elif technique == "mode":
         for col in df_out.columns:
             mode = df_out[col].mode()
             if not mode.empty:
-                df_out[col].fillna(mode[0], inplace=True)
+                df_out[col] = df_out[col].fillna(mode[0])
 
     elif technique == "knn":
         n = params.get("n_neighbors", 5)
@@ -73,17 +73,17 @@ def handle_missing(df: pd.DataFrame, technique: str, params: dict) -> PipelineSt
             if df_out[col].isnull().any():
                 df_out[f"{col}_was_missing"] = df_out[col].isnull().astype(int)
         for col in numeric_cols:
-            df_out[col].fillna(df_out[col].median(), inplace=True)
+            df_out[col] = df_out[col].fillna(df_out[col].median())
         fill_cats(df_out)
         warnings.append("Added binary indicator columns for each numeric column that had missing values. Then filled with median.")
 
     elif technique == "constant":
         fill_value = params.get("fill_value", 0)
-        df_out.fillna(fill_value, inplace=True)
+        df_out = df_out.fillna(fill_value)
 
     elif technique == "drop_rows":
         rows_before = len(df_out)
-        df_out.dropna(inplace=True)
+        df_out = df_out.dropna()
         dropped = rows_before - len(df_out)
         if dropped > 0:
             warnings.append(f"Dropped {dropped} rows ({round(dropped/rows_before*100,1)}% of data).")
@@ -91,7 +91,7 @@ def handle_missing(df: pd.DataFrame, technique: str, params: dict) -> PipelineSt
     elif technique == "drop_cols":
         threshold = params.get("threshold", 0.5)
         cols_to_drop = [c for c in df_out.columns if df_out[c].isnull().mean() > threshold]
-        df_out.drop(columns=cols_to_drop, inplace=True)
+        df_out = df_out.drop(columns=cols_to_drop)
         if cols_to_drop:
             warnings.append(f"Dropped {len(cols_to_drop)} column(s): {cols_to_drop}.")
         else:
@@ -353,7 +353,7 @@ def handle_feature_selection(
         sel = VarianceThreshold(threshold=threshold)
         sel.fit(X)
         low_var = X.columns[~sel.get_support()].tolist()
-        df_out.drop(columns=low_var, inplace=True)
+        df_out = df_out.drop(columns=low_var)
         dropped = low_var
         if not dropped:
             warnings.append(f"No features had variance below {threshold}. Nothing dropped.")
@@ -363,7 +363,7 @@ def handle_feature_selection(
         corr_matrix = X.corr().abs()
         upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
         to_drop = [col for col in upper.columns if any(upper[col] > threshold)]
-        df_out.drop(columns=to_drop, inplace=True)
+        df_out = df_out.drop(columns=to_drop)
         dropped = to_drop
         if not dropped:
             warnings.append(f"No feature pairs with correlation > {threshold} found.")
