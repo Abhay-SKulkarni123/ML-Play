@@ -250,7 +250,7 @@ async def train(
 
     return TrainResponse(
         run_id=run.id,
-        model=result["model"],
+        model_name=body.model_name,
         metrics=result["metrics"],
         feature_importance=result["feature_importance"],
         train_size=result["train_size"],
@@ -288,7 +288,7 @@ async def tune(
     X_train_raw, X_test_raw, y_train, y_test = train_test_split(
         X_raw, y, test_size=body.test_size, random_state=42, stratify=stratify
     )
-    X_train, _ = _apply_pipeline_split_aware(
+    X_train, _, y_train = _apply_pipeline_split_aware(
         X_train_raw.copy(), X_test_raw.copy(), y_train,
         dict(session.pipeline_state), target_col,
     )
@@ -401,15 +401,15 @@ async def tune(
     try:
         def _run_study():
             study = optuna.create_study(direction="maximize")
-            study.optimize(objective, n_trials=20, timeout=60)
+            study.optimize(objective, n_trials=50, timeout=120)
             return study
 
         study = await asyncio.wait_for(
             loop.run_in_executor(_ml_executor, _run_study),
-            timeout=90,
+            timeout=150,
         )
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=408, detail="Hyperparameter search timed out after 90s.")
+        raise HTTPException(status_code=408, detail="Hyperparameter search timed out after 150s.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Tuning failed: {str(e)}")
 
@@ -457,7 +457,7 @@ async def tune(
 
     return TrainResponse(
         run_id=run.id,
-        model=model_name,
+        model_name=model_name,
         metrics=final_metrics,
         feature_importance=result["feature_importance"],
         train_size=result["train_size"],

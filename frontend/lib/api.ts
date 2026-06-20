@@ -52,7 +52,7 @@ export interface StepResponse {
 
 export interface TrainResponse {
   run_id: string;
-  model: string;
+  model_name: string;
   metrics: Record<string, any>;
   feature_importance: Record<string, number>;
   train_size: number;

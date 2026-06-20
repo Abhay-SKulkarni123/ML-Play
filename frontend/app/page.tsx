@@ -38,6 +38,10 @@ export default function Home() {
       localStorage.setItem("ml_last_session", session.id);
       router.push(`/playground/${session.id}`);
     } catch (e: any) {
+      if (e.message?.includes("not found")) {
+        localStorage.removeItem("ml_last_session");
+        setLastSession(null);
+      }
       setError(e.message || "Failed to start session.");
       setStarting(null);
     }

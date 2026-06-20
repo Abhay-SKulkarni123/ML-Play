@@ -8,6 +8,7 @@ import { useParams, useRouter } from "next/navigation";
         EDADistributions, EDACorrelation, EDATargetAnalysis, RunRecord,
         getDatasets, AutoMLStatus,
     } from "@/lib/api";
+    import MetricCard from "@/components/MetricCard";
 import {
     BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
     LineChart, Line, RadarChart, Radar, PolarGrid, PolarAngleAxis,
@@ -1905,20 +1906,22 @@ function TrainResultCard({ result, label: cardLabel, highlight }: {
             <div className={`px-4 py-3 border-b flex items-center justify-between ${highlight ? "border-emerald-500/20" : "border-slate-800"}`}>
                 <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">{cardLabel}</span>
                 <span className={`text-xs px-2.5 py-1 rounded-lg font-medium ${highlight ? "bg-emerald-500/10 text-emerald-300" : "bg-slate-800 text-slate-400"}`}>
-                    {TECHNIQUES.train.find(m => m.value === result.model)?.label ?? result.model}
+                    {TECHNIQUES.train.find(m => m.value === result.model_name)?.label ?? result.model_name}
                 </span>
             </div>
-            <div className="p-4">
-                <div className="grid grid-cols-2 gap-2">
+            <div className="p-4 space-y-4">
+                {/* Primary Metrics */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                     {Object.entries(result.metrics)
-                        .filter(([k]) => !["confusion_matrix", "trials", "imbalance_warning"].includes(k))
+                        .filter(([k]) => !["confusion_matrix", "trials", "imbalance_warning", "best_trial_score", "n_trials", "best_cv_score"].includes(k))
+                        .slice(0, 6)
                         .map(([k, v]) => (
-                            <div key={k} className="bg-slate-800/60 rounded-lg p-2.5">
-                                <div className="text-xs text-slate-500">{label(k)}</div>
-                                <div className="text-sm font-mono font-bold text-white mt-0.5">
-                                    {typeof v === "number" ? v.toFixed(4) : String(v)}
-                                </div>
-                            </div>
+                            <MetricCard
+                                key={k}
+                                label={label(k)}
+                                value={typeof v === "number" ? v : Number(v)}
+                                size="sm"
+                            />
                         ))}
                 </div>
 
@@ -2046,17 +2049,17 @@ function TuneView({ taskType, selectedModel, selectedMethod, onSelectModel,
                 <div className="space-y-4">
                     <div className="bg-violet-500/5 border border-violet-500/20 rounded-xl p-4">
                         <p className="text-sm font-semibold text-violet-300 mb-3">Best Result Found</p>
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-2 gap-3">
                             {[
                                 { k: "Best CV Score", v: result.metrics.best_trial_score ?? result.metrics.best_cv_score },
                                 { k: "Trials Run", v: result.metrics.n_trials ?? "N/A" },
                             ].map(({ k, v }) => (
-                                <div key={k} className="bg-slate-900/50 rounded-lg p-3">
-                                    <div className="text-xs text-slate-500">{k}</div>
-                                    <div className="text-lg font-bold font-mono text-white mt-0.5">
-                                        {typeof v === "number" ? v.toFixed(4) : String(v ?? "—")}
-                                    </div>
-                                </div>
+                                <MetricCard
+                                    key={k}
+                                    label={k}
+                                    value={typeof v === "number" ? v : Number(v ?? 0)}
+                                    size="md"
+                                />
                             ))}
                         </div>
                     </div>
@@ -2123,7 +2126,7 @@ function ExplainView({ trainResult, taskType, onNext }: {
     return (
         <div className="max-w-3xl space-y-5">
             <div className="flex items-center gap-3 text-sm text-slate-400">
-                <span>Model: <span className="text-white font-semibold">{TECHNIQUES.train.find(m => m.value === trainResult.model)?.label ?? trainResult.model}</span></span>
+                <span>Model: <span className="text-white font-semibold">{TECHNIQUES.train.find(m => m.value === trainResult.model_name)?.label ?? trainResult.model_name}</span></span>
                 <span className="text-slate-600">·</span>
                 <span>{trainResult.n_features} features</span>
             </div>
@@ -2342,7 +2345,7 @@ function PredictView({ profile, session, finalModel }: {
             <p className="text-xs text-slate-500">
                 Enter feature values below and get a live prediction from your trained{" "}
                 <span className="text-slate-300 font-semibold">
-                    {TECHNIQUES.train.find(m => m.value === finalModel.model)?.label || finalModel.model}
+                    {TECHNIQUES.train.find(m => m.value === finalModel.model_name)?.label || finalModel.model_name}
                 </span> model.
             </p>
 

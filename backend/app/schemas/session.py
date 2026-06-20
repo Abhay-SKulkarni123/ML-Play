@@ -44,7 +44,7 @@ class TrainRequest(BaseModel):
 
 class TrainResponse(BaseModel):
     run_id: UUID
-    model: str
+    model_name: str
     metrics: dict
     feature_importance: dict
     train_size: int
