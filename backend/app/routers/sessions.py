@@ -401,7 +401,7 @@ async def tune(
     try:
         def _run_study():
             study = optuna.create_study(direction="maximize")
-            study.optimize(objective, n_trials=50, timeout=120)
+            study.optimize(objective, n_trials=60, timeout=120)
             return study
 
         study = await asyncio.wait_for(

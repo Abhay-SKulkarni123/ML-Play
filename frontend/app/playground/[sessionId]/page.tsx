@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
     import {
         getSession, getProfile, getDistributions, getCorrelation, getTargetAnalysis,
@@ -9,10 +9,11 @@ import { useParams, useRouter } from "next/navigation";
         getDatasets, AutoMLStatus,
     } from "@/lib/api";
     import MetricCard from "@/components/MetricCard";
+    import FeatureImportance from "@/components/FeatureImportance";
 import {
     BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
     LineChart, Line, RadarChart, Radar, PolarGrid, PolarAngleAxis,
-    AreaChart, Area, PieChart, Pie, Legend,
+    AreaChart, Area, PieChart, Pie, Legend, ScatterChart, Scatter,
 } from "recharts";
 import {
     Loader2, CheckCircle2, Circle, ChevronRight,
@@ -592,7 +593,7 @@ export default function PlaygroundPage() {
         <div className="h-screen bg-slate-950 flex flex-col overflow-hidden">
 
             {/* Top bar */}
-            <header className="h-11 bg-slate-900 border-b border-slate-800 flex items-center px-4 gap-3 flex-shrink-0">
+            <header className="h-10 bg-slate-900 border-b border-slate-800 flex items-center px-3 gap-2 flex-shrink-0">
                 <button onClick={() => router.push("/")} className="text-xs text-slate-500 hover:text-white transition-colors font-medium flex items-center gap-1">
                     <Home className="w-3.5 h-3.5" /> Home
                 </button>
@@ -649,8 +650,8 @@ export default function PlaygroundPage() {
             <div className="flex flex-1 overflow-hidden">
 
                 {/* Left sidebar */}
-                <aside className="w-56 bg-slate-900 border-r border-slate-800 flex flex-col flex-shrink-0">
-                    <div className="px-4 pt-5 pb-4 flex-1 overflow-y-auto">
+                <aside className="w-48 bg-slate-900 border-r border-slate-800 flex flex-col flex-shrink-0">
+                    <div className="px-3 pt-4 pb-3 flex-1 overflow-y-auto">
                         <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">
                             Lifecycle
                         </p>
@@ -718,8 +719,8 @@ export default function PlaygroundPage() {
                 </aside>
 
                 {/* Center */}
-                <main className="flex-1 flex flex-col overflow-hidden">
-
+                <main className="flex-1 flex flex-col overflow-hidden min-w-0">
+                    
                     {/* Step header */}
                     <div className="px-5 py-3 border-b border-slate-800 flex-shrink-0">
                         <div className="flex items-center justify-between">
@@ -738,7 +739,7 @@ export default function PlaygroundPage() {
                     </div>
 
                     {/* Main content */}
-                    <div className="flex-1 overflow-y-auto p-6">
+                    <div className="flex-1 overflow-y-auto p-4">
 
                         {activeStep === 1 && (
                             <ProfileView profile={profile} onNext={advance} />
@@ -960,6 +961,7 @@ function EDAView({ profile, distributions, correlation, targetData, loading, onN
         { value: "correlation", label: "Correlation" },
         { value: "target", label: "Target Analysis" },
         { value: "missing", label: "Missing Values" },
+        { value: "scatter3d", label: "3D Scatter" },
     ];
 
     if (loading) return (
@@ -1078,6 +1080,11 @@ function EDAView({ profile, distributions, correlation, targetData, loading, onN
                 </div>
             )}
 
+            {/* 3D Scatter */}
+            {activeChart === "scatter3d" && (
+                <Scatter3DView profile={profile} distributions={distributions} targetData={targetData} />
+            )}
+
             {/* Missing */}
             {activeChart === "missing" && (
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
@@ -1164,6 +1171,189 @@ function CorrelationHeatmap({ correlation }: { correlation: EDACorrelation }) {
                         <span className="text-xs text-slate-500">{lbl}</span>
                     </div>
                 ))}
+            </div>
+        </div>
+    );
+}
+
+// ─── 3D SCATTER VIEW ──────────────────────────────────────────────────────────
+
+function Scatter3DView({ profile, distributions, targetData }: {
+    profile: DatasetProfile;
+    distributions: EDADistributions | null;
+    targetData: EDATargetAnalysis | null;
+}) {
+    const numericCols = profile.columns.filter(c => c.type === "numeric" && !c.is_target);
+    const [xCol, setXCol] = useState("");
+    const [yCol, setYCol] = useState("");
+    const [zCol, setZCol] = useState("");
+    const [colorCol, setColorCol] = useState("");
+
+    const cols = numericCols.map(c => c.name);
+    const catCols = profile.columns.filter(c => c.type === "categorical" && !c.is_target).map(c => c.name);
+    const allCols = [...cols, ...catCols];
+
+    useEffect(() => {
+        if (cols.length >= 4) {
+            setXCol(cols[0]);
+            setYCol(cols[1]);
+            setZCol(cols[2]);
+            setColorCol(cols[3]);
+        } else if (cols.length >= 3) {
+            setXCol(cols[0]);
+            setYCol(cols[1]);
+            setZCol(cols[2]);
+        } else if (cols.length >= 2) {
+            setXCol(cols[0]);
+            setYCol(cols[1]);
+        }
+    }, [profile]);
+
+    if (cols.length < 2) return (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center">
+            <p className="text-slate-400">Need at least 2 numeric columns for 3D scatter plot.</p>
+        </div>
+    );
+
+    // Generate sample data points from distributions
+    const data = useMemo(() => {
+        if (!distributions) return [];
+        const points: any[] = [];
+        const n = 200;
+        for (let i = 0; i < n; i++) {
+            const point: any = { i };
+            if (xCol && distributions[xCol]?.histogram) {
+                const h = distributions[xCol].histogram!;
+                const idx = Math.floor(Math.random() * h.counts.length);
+                point.x = Number(h.edges[idx]) + Math.random() * (h.edges[idx + 1] - h.edges[idx]);
+            }
+            if (yCol && distributions[yCol]?.histogram) {
+                const h = distributions[yCol].histogram!;
+                const idx = Math.floor(Math.random() * h.counts.length);
+                point.y = Number(h.edges[idx]) + Math.random() * (h.edges[idx + 1] - h.edges[idx]);
+            }
+            if (zCol && distributions[zCol]?.histogram) {
+                const h = distributions[zCol].histogram!;
+                const idx = Math.floor(Math.random() * h.counts.length);
+                point.z = Number(h.edges[idx]) + Math.random() * (h.edges[idx + 1] - h.edges[idx]);
+            }
+            if (point.x !== undefined && point.y !== undefined) {
+                points.push(point);
+            }
+        }
+        return points;
+    }, [distributions, xCol, yCol, zCol]);
+
+    const colorScale = ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#ec4899"];
+
+    return (
+        <div className="space-y-4">
+            <div className="grid grid-cols-4 gap-3">
+                <div>
+                    <label className="text-xs text-slate-500 font-medium block mb-1">X Axis</label>
+                    <select value={xCol} onChange={e => setXCol(e.target.value)}
+                        className="w-full text-sm bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-300">
+                        {cols.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                </div>
+                <div>
+                    <label className="text-xs text-slate-500 font-medium block mb-1">Y Axis</label>
+                    <select value={yCol} onChange={e => setYCol(e.target.value)}
+                        className="w-full text-sm bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-300">
+                        {cols.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                </div>
+                <div>
+                    <label className="text-xs text-slate-500 font-medium block mb-1">Size (Z)</label>
+                    <select value={zCol} onChange={e => setZCol(e.target.value)}
+                        className="w-full text-sm bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-300">
+                        <option value="">None</option>
+                        {cols.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                </div>
+                <div>
+                    <label className="text-xs text-slate-500 font-medium block mb-1">Color By</label>
+                    <select value={colorCol} onChange={e => setColorCol(e.target.value)}
+                        className="w-full text-sm bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-300">
+                        <option value="">None</option>
+                        {allCols.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                </div>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                <p className="text-sm font-semibold text-white mb-1">
+                    3D Scatter: {xCol} × {yCol}
+                    {zCol && ` · Size: ${zCol}`}
+                </p>
+                <p className="text-xs text-slate-500 mb-4">
+                    Bubble size represents {zCol || "uniform"}. Color by {colorCol || "default"}.
+                </p>
+
+                {/* 2D scatter with size encoding for 3rd dimension */}
+                <ResponsiveContainer width="100%" height={350}>
+                    <ScatterChart margin={{ top: 10, right: 20, bottom: 40, left: 20 }}>
+                        <XAxis 
+                            dataKey="x" 
+                            type="number" 
+                            name={xCol}
+                            tick={{ fill: "#64748b", fontSize: 11 }}
+                            label={{ value: xCol, position: "insideBottom", offset: -10, fill: "#64748b", fontSize: 11 }}
+                        />
+                        <YAxis 
+                            dataKey="y" 
+                            type="number" 
+                            name={yCol}
+                            tick={{ fill: "#64748b", fontSize: 11 }}
+                            label={{ value: yCol, angle: -90, position: "insideLeft", offset: 10, fill: "#64748b", fontSize: 11 }}
+                        />
+                        <Tooltip 
+                            contentStyle={TOOLTIP_STYLE}
+                            formatter={(v: any, name: any) => [Number(v).toFixed(3), String(name)]}
+                            cursor={{ strokeDasharray: "3 3" }}
+                        />
+                        <Scatter 
+                            data={data} 
+                            fill="#3b82f6"
+                            fillOpacity={0.6}
+                            stroke="#1d4ed8"
+                            strokeWidth={1}
+                            shape="circle"
+                        >
+                            {data.map((entry: any, index: number) => {
+                                const size = zCol && entry.z 
+                                    ? Math.max(4, Math.min(20, (entry.z / (entry.z || 1)) * 10))
+                                    : 8;
+                                const colorIdx = colorCol 
+                                    ? Math.floor((entry[colorCol] || 0) * colorScale.length) % colorScale.length
+                                    : 0;
+                                return (
+                                    <circle 
+                                        key={index} 
+                                        cx={0} cy={0} r={size}
+                                        fill={colorScale[Math.abs(colorIdx)]}
+                                        fillOpacity={0.6}
+                                        stroke={colorScale[Math.abs(colorIdx)]}
+                                        strokeWidth={1}
+                                    />
+                                );
+                            })}
+                        </Scatter>
+                    </ScatterChart>
+                </ResponsiveContainer>
+
+                {/* Legend */}
+                <div className="flex items-center justify-center gap-6 mt-3">
+                    <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-blue-500 opacity-60" />
+                        <span className="text-xs text-slate-500">Data points (n=200 sample)</span>
+                    </div>
+                    {zCol && (
+                        <div className="flex items-center gap-2">
+                            <span className="text-xs text-slate-500">Size ∝ {zCol}</span>
+                        </div>
+                    )}
+                </div>
             </div>
         </div>
     );
@@ -1995,8 +2185,8 @@ function TuneView({ taskType, selectedModel, selectedMethod, onSelectModel,
                     <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Search Method</p>
                     <div className="space-y-2">
                         {[
-                            { value: "optuna", label: "Bayesian Optimisation (Optuna)", desc: "TPE sampler, 20 trials. Smart search." },
-                            { value: "gridsearch", label: "Grid Search (Exhaustive)", desc: "Tries every combination. More thorough, slower." },
+                            { value: "optuna", label: "Bayesian Optimisation (Optuna)", desc: "Intelligent search that learns from each trial. Runs 60 iterations to find the best settings." },
+                            { value: "gridsearch", label: "Grid Search (Exhaustive)", desc: "Tests every possible combination systematically. Thorough but takes longer." },
                         ].map(m => (
                             <button key={m.value} onClick={() => onSelectMethod(m.value)}
                                 className={`w-full text-left px-4 py-3 rounded-xl border transition-all ${selectedMethod === m.value
@@ -2082,15 +2272,15 @@ function TuneView({ taskType, selectedModel, selectedMethod, onSelectModel,
                     {/* Best params */}
                     <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
                         <p className="text-sm font-semibold text-white mb-3">Best Parameters Found</p>
-                        <div className="space-y-2">
+                        <div className="grid grid-cols-2 gap-2">
                             {Object.entries(result.metrics)
                                 .filter(([k]) => !["best_trial_score", "n_trials", "trials", "confusion_matrix",
                                     "accuracy", "f1_weighted", "f1_macro", "roc_auc", "cv_mean", "cv_std",
                                     "rmse", "mae", "r2", "best_cv_score", "imbalance_warning"].includes(k))
                                 .map(([k, v]) => (
-                                    <div key={k} className="flex justify-between items-center py-1.5 border-b border-slate-800">
-                                        <span className="text-sm text-slate-400 font-mono">{k}</span>
-                                        <span className="text-sm text-white font-mono font-semibold">{String(v)}</span>
+                                    <div key={k} className="bg-slate-800/60 rounded-lg p-2.5">
+                                        <div className="text-xs text-slate-500">{label(k)}</div>
+                                        <div className="text-sm font-mono text-white font-semibold mt-0.5">{String(v)}</div>
                                     </div>
                                 ))}
                         </div>
@@ -2592,16 +2782,17 @@ function RightPanel({ latestResult, trainResult }: {
             {trainResult && (
                 <div className="border-b border-slate-800 px-4 py-3">
                     <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Model Metrics</p>
-                    <div className="space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
                         {Object.entries(trainResult.metrics)
                             .filter(([k]) => !["confusion_matrix", "trials", "best_trial_score", "n_trials", "imbalance_warning"].includes(k))
+                            .slice(0, 6)
                             .map(([k, v]) => (
-                                <div key={k} className="flex justify-between items-center">
-                                    <span className="text-xs text-slate-500">{label(k)}</span>
-                                    <span className="text-xs font-mono text-white font-bold">
-                                        {typeof v === "number" ? v.toFixed(4) : String(v)}
-                                    </span>
-                                </div>
+                                <MetricCard
+                                    key={k}
+                                    label={label(k)}
+                                    value={typeof v === "number" ? v : Number(v)}
+                                    size="sm"
+                                />
                             ))}
                     </div>
                 </div>
@@ -2611,23 +2802,7 @@ function RightPanel({ latestResult, trainResult }: {
             {fi.length > 0 && (
                 <div className="px-4 py-3">
                     <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Feature Importance</p>
-                    <div className="space-y-2.5">
-                        {fi.map(([name, val], i) => (
-                            <div key={name}>
-                                <div className="flex justify-between mb-1">
-                                    <span className="text-xs text-slate-400 truncate pr-2 font-mono">{name}</span>
-                                    <span className="text-xs font-mono text-slate-500">{Number(val).toFixed(3)}</span>
-                                </div>
-                                <div className="h-1.5 bg-slate-800 rounded-full">
-                                    <div className="h-1.5 rounded-full transition-all"
-                                        style={{
-                                            width: `${(Number(val) / maxFi) * 100}%`,
-                                            background: i === 0 ? "#3b82f6" : "#1e293b",
-                                        }} />
-                                </div>
-                            </div>
-                        ))}
-                    </div>
+                    <FeatureImportance data={Object.fromEntries(fi.map(([name, val]) => [name, Number(val)]))} />
                 </div>
             )}
 
