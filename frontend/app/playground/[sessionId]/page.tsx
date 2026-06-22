@@ -618,30 +618,6 @@ export default function PlaygroundPage() {
                             : "bg-amber-500/10 text-amber-400"}`}>
                         {session.task_type === "classification" ? "Classification" : "Regression"}
                     </span>
-                    {/* <button onClick={() => setShowSaveDialog(true)}
-                        className="text-xs px-2.5 py-1 rounded-md bg-slate-800 text-slate-400 border border-slate-700 hover:text-white hover:border-slate-600 transition-colors font-medium flex items-center gap-1">
-                        <Download className="w-3 h-3" /> Save
-                    </button> */}
-                    <button onClick={handleShare}
-                        disabled={sharing}
-                        className="text-xs px-2.5 py-1 rounded-md bg-blue-600 text-white border border-blue-500 hover:bg-blue-500 transition-colors font-medium flex items-center gap-1 disabled:opacity-40">
-                        {sharing ? <><Loader2 className="w-3 h-3 animate-spin" />Sharing...</> : <><Share2 className="w-3 h-3" />Share</>}
-                    </button>
-                    {shareUrl && (
-                        <div className="flex items-center gap-2">
-                            <input
-                                type="text"
-                                value={shareUrl}
-                                readOnly
-                                className="text-xs bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-300 w-48"
-                            />
-                            <button
-                                onClick={() => navigator.clipboard.writeText(shareUrl)}
-                                className="text-xs px-2 py-1 bg-slate-700 text-slate-300 rounded hover:bg-slate-600">
-                                Copy
-                            </button>
-                        </div>
-                    )}
 
                     {/* Save button */}
                     <button
@@ -652,8 +628,8 @@ export default function PlaygroundPage() {
                             });
                         }}
                         className="text-xs px-2.5 py-1 rounded-md bg-slate-800 text-slate-400
-    border border-slate-700 hover:text-white hover:border-slate-600
-    transition-colors font-medium flex items-center gap-1">
+                        border border-slate-700 hover:text-white hover:border-slate-600
+                        transition-colors font-medium flex items-center gap-1">
                         {saveConfirmed
                             ? <><CheckCircle2 className="w-3 h-3 text-emerald-400" />Saved!</>
                             : <><Download className="w-3 h-3" />Save</>}
@@ -1117,10 +1093,6 @@ function EDAView({ profile, distributions, correlation, targetData, loading, onN
                 </div>
             )}
 
-            {/* 3D Scatter */}
-            {/* {activeChart === "scatter3d" && (
-                <Scatter3DView profile={profile} distributions={distributions} targetData={targetData} />
-            )} */}
 
             {activeChart === "scatter3d" && (
                 <Scatter3DView
@@ -1219,189 +1191,6 @@ function CorrelationHeatmap({ correlation }: { correlation: EDACorrelation }) {
         </div>
     );
 }
-
-// ─── 3D SCATTER VIEW ──────────────────────────────────────────────────────────
-
-// function Scatter3DView({ profile, distributions, targetData }: {
-//     profile: DatasetProfile;
-//     distributions: EDADistributions | null;
-//     targetData: EDATargetAnalysis | null;
-// }) {
-//     const numericCols = profile.columns.filter(c => c.type === "numeric" && !c.is_target);
-//     const [xCol, setXCol] = useState("");
-//     const [yCol, setYCol] = useState("");
-//     const [zCol, setZCol] = useState("");
-//     const [colorCol, setColorCol] = useState("");
-
-//     const cols = numericCols.map(c => c.name);
-//     const catCols = profile.columns.filter(c => c.type === "categorical" && !c.is_target).map(c => c.name);
-//     const allCols = [...cols, ...catCols];
-
-//     useEffect(() => {
-//         if (cols.length >= 4) {
-//             setXCol(cols[0]);
-//             setYCol(cols[1]);
-//             setZCol(cols[2]);
-//             setColorCol(cols[3]);
-//         } else if (cols.length >= 3) {
-//             setXCol(cols[0]);
-//             setYCol(cols[1]);
-//             setZCol(cols[2]);
-//         } else if (cols.length >= 2) {
-//             setXCol(cols[0]);
-//             setYCol(cols[1]);
-//         }
-//     }, [profile]);
-
-//     if (cols.length < 2) return (
-//         <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center">
-//             <p className="text-slate-400">Need at least 2 numeric columns for 3D scatter plot.</p>
-//         </div>
-//     );
-
-//     // Generate sample data points from distributions
-//     const data = useMemo(() => {
-//         if (!distributions) return [];
-//         const points: any[] = [];
-//         const n = 200;
-//         for (let i = 0; i < n; i++) {
-//             const point: any = { i };
-//             if (xCol && distributions[xCol]?.histogram) {
-//                 const h = distributions[xCol].histogram!;
-//                 const idx = Math.floor(Math.random() * h.counts.length);
-//                 point.x = Number(h.edges[idx]) + Math.random() * (h.edges[idx + 1] - h.edges[idx]);
-//             }
-//             if (yCol && distributions[yCol]?.histogram) {
-//                 const h = distributions[yCol].histogram!;
-//                 const idx = Math.floor(Math.random() * h.counts.length);
-//                 point.y = Number(h.edges[idx]) + Math.random() * (h.edges[idx + 1] - h.edges[idx]);
-//             }
-//             if (zCol && distributions[zCol]?.histogram) {
-//                 const h = distributions[zCol].histogram!;
-//                 const idx = Math.floor(Math.random() * h.counts.length);
-//                 point.z = Number(h.edges[idx]) + Math.random() * (h.edges[idx + 1] - h.edges[idx]);
-//             }
-//             if (point.x !== undefined && point.y !== undefined) {
-//                 points.push(point);
-//             }
-//         }
-//         return points;
-//     }, [distributions, xCol, yCol, zCol]);
-
-//     const colorScale = ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#ec4899"];
-
-//     return (
-//         <div className="space-y-4">
-//             <div className="grid grid-cols-4 gap-3">
-//                 <div>
-//                     <label className="text-xs text-slate-500 font-medium block mb-1">X Axis</label>
-//                     <select value={xCol} onChange={e => setXCol(e.target.value)}
-//                         className="w-full text-sm bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-300">
-//                         {cols.map(c => <option key={c} value={c}>{c}</option>)}
-//                     </select>
-//                 </div>
-//                 <div>
-//                     <label className="text-xs text-slate-500 font-medium block mb-1">Y Axis</label>
-//                     <select value={yCol} onChange={e => setYCol(e.target.value)}
-//                         className="w-full text-sm bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-300">
-//                         {cols.map(c => <option key={c} value={c}>{c}</option>)}
-//                     </select>
-//                 </div>
-//                 <div>
-//                     <label className="text-xs text-slate-500 font-medium block mb-1">Size (Z)</label>
-//                     <select value={zCol} onChange={e => setZCol(e.target.value)}
-//                         className="w-full text-sm bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-300">
-//                         <option value="">None</option>
-//                         {cols.map(c => <option key={c} value={c}>{c}</option>)}
-//                     </select>
-//                 </div>
-//                 <div>
-//                     <label className="text-xs text-slate-500 font-medium block mb-1">Color By</label>
-//                     <select value={colorCol} onChange={e => setColorCol(e.target.value)}
-//                         className="w-full text-sm bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-300">
-//                         <option value="">None</option>
-//                         {allCols.map(c => <option key={c} value={c}>{c}</option>)}
-//                     </select>
-//                 </div>
-//             </div>
-
-//             <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-//                 <p className="text-sm font-semibold text-white mb-1">
-//                     3D Scatter: {xCol} × {yCol}
-//                     {zCol && ` · Size: ${zCol}`}
-//                 </p>
-//                 <p className="text-xs text-slate-500 mb-4">
-//                     Bubble size represents {zCol || "uniform"}. Color by {colorCol || "default"}.
-//                 </p>
-
-//                 {/* 2D scatter with size encoding for 3rd dimension */}
-//                 <ResponsiveContainer width="100%" height={350}>
-//                     <ScatterChart margin={{ top: 10, right: 20, bottom: 40, left: 20 }}>
-//                         <XAxis 
-//                             dataKey="x" 
-//                             type="number" 
-//                             name={xCol}
-//                             tick={{ fill: "#64748b", fontSize: 11 }}
-//                             label={{ value: xCol, position: "insideBottom", offset: -10, fill: "#64748b", fontSize: 11 }}
-//                         />
-//                         <YAxis 
-//                             dataKey="y" 
-//                             type="number" 
-//                             name={yCol}
-//                             tick={{ fill: "#64748b", fontSize: 11 }}
-//                             label={{ value: yCol, angle: -90, position: "insideLeft", offset: 10, fill: "#64748b", fontSize: 11 }}
-//                         />
-//                         <Tooltip 
-//                             contentStyle={TOOLTIP_STYLE}
-//                             formatter={(v: any, name: any) => [Number(v).toFixed(3), String(name)]}
-//                             cursor={{ strokeDasharray: "3 3" }}
-//                         />
-//                         <Scatter 
-//                             data={data} 
-//                             fill="#3b82f6"
-//                             fillOpacity={0.6}
-//                             stroke="#1d4ed8"
-//                             strokeWidth={1}
-//                             shape="circle"
-//                         >
-//                             {data.map((entry: any, index: number) => {
-//                                 const size = zCol && entry.z 
-//                                     ? Math.max(4, Math.min(20, (entry.z / (entry.z || 1)) * 10))
-//                                     : 8;
-//                                 const colorIdx = colorCol 
-//                                     ? Math.floor((entry[colorCol] || 0) * colorScale.length) % colorScale.length
-//                                     : 0;
-//                                 return (
-//                                     <circle 
-//                                         key={index} 
-//                                         cx={0} cy={0} r={size}
-//                                         fill={colorScale[Math.abs(colorIdx)]}
-//                                         fillOpacity={0.6}
-//                                         stroke={colorScale[Math.abs(colorIdx)]}
-//                                         strokeWidth={1}
-//                                     />
-//                                 );
-//                             })}
-//                         </Scatter>
-//                     </ScatterChart>
-//                 </ResponsiveContainer>
-
-//                 {/* Legend */}
-//                 <div className="flex items-center justify-center gap-6 mt-3">
-//                     <div className="flex items-center gap-2">
-//                         <div className="w-3 h-3 rounded-full bg-blue-500 opacity-60" />
-//                         <span className="text-xs text-slate-500">Data points (n=200 sample)</span>
-//                     </div>
-//                     {zCol && (
-//                         <div className="flex items-center gap-2">
-//                             <span className="text-xs text-slate-500">Size ∝ {zCol}</span>
-//                         </div>
-//                     )}
-//                 </div>
-//             </div>
-//         </div>
-//     );
-// }
 
 function Scatter3DView({ profile, sessionDatasetId }: {
     profile: DatasetProfile;
