@@ -6,6 +6,8 @@ from pathlib import Path
 import pandas as pd
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
+from app.services.ml.dataset import load_dataset
+
 router = APIRouter(
     prefix="/datasets",
     tags=["datasets"]
@@ -185,4 +187,22 @@ async def upload_dataset(
         "task": task,
         "rows": len(df),
         "cols": len(df.columns),
+    }
+
+@router.get("/{dataset_id}/sample")
+async def get_sample(dataset_id: str, n: int = 200):
+    """Return n real rows for scatter plot visualization."""
+    try:
+        df = load_dataset(dataset_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    
+    sample = df.select_dtypes(include="number").sample(
+        min(n, len(df)), random_state=42
+    ).fillna(0)
+    
+    return {
+        "rows": sample.to_dict(orient="records"),
+        "columns": sample.columns.tolist(),
+        "n": len(sample),
     }

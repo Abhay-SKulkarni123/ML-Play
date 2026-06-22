@@ -146,7 +146,9 @@ export const uploadDataset = (formData: FormData) =>
       task: string;
       rows: number;
       cols: number;
-    }>("/datasets/upload", formData, { headers: { "Content-Type": "multipart/form-data" } })
+    }>("/datasets/upload", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    })
     .then((r) => r.data);
 
 // ─── EDA ──────────────────────────────────────────────────────────────────────
@@ -245,21 +247,28 @@ export const getRuns = (sessionId: string) =>
 
 export const resetStep = (sessionId: string, stepName: string) =>
   api
-    .post<{ message: string; pipeline_state: Record<string, any> }>(
-      `/sessions/${sessionId}/steps/${stepName}/reset`
-    )
+    .post<{
+      message: string;
+      pipeline_state: Record<string, any>;
+    }>(`/sessions/${sessionId}/steps/${stepName}/reset`)
     .then((r) => r.data);
 
 // ─── SAVE / SHARE ─────────────────────────────────────────────────────────────
 
 export const saveSession = (sessionId: string, name: string) =>
   api
-    .post<{ message: string; name: string }>(`/sessions/${sessionId}/save`, { name })
+    .post<{
+      message: string;
+      name: string;
+    }>(`/sessions/${sessionId}/save`, { name })
     .then((r) => r.data);
 
 export const shareSession = (sessionId: string) =>
   api
-    .post<{ share_token: string; share_url: string }>(`/sessions/${sessionId}/share`)
+    .post<{
+      share_token: string;
+      share_url: string;
+    }>(`/sessions/${sessionId}/share`)
     .then((r) => r.data);
 
 export const getSharedSession = (shareToken: string) =>
@@ -319,7 +328,9 @@ export const runAutoML = (formData: FormData) =>
       job_id: string;
       status: string;
       columns: string[];
-    }>("/automl/run", formData, { headers: { "Content-Type": "multipart/form-data" } })
+    }>("/automl/run", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    })
     .then((r) => r.data);
 
 // Dataset cards — runs AutoML on already-stored dataset
@@ -330,9 +341,20 @@ export const runAutoMLForDataset = (datasetId: string, targetCol = "") =>
       status: string;
       dataset: string;
       target: string;
-    }>("/automl/run-for-dataset", null, { params: { dataset_id: datasetId, target_col: targetCol } })
+    }>("/automl/run-for-dataset", null, {
+      params: { dataset_id: datasetId, target_col: targetCol },
+    })
     .then((r) => r.data);
 
 // Poll job status
 export const getAutoMLStatus = (jobId: string) =>
   api.get<AutoMLStatus>(`/automl/status/${jobId}`).then((r) => r.data);
+
+export const getDatasetSample = (datasetId: string, n = 200) =>
+  api
+    .get<{
+      rows: Record<string, number>[];
+      columns: string[];
+      n: number;
+    }>(`/datasets/${datasetId}/sample`, { params: { n } })
+    .then((r) => r.data);
