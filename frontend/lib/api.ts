@@ -1,7 +1,9 @@
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000",
+  baseURL:
+    process.env.NEXT_PUBLIC_API_URL ||
+    "https://backend-production-dbc5.up.railway.app",
   timeout: 300_000,
 });
 

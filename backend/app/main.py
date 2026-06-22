@@ -12,10 +12,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_origins=[
         "http://localhost:3000",
-        "https://*.vercel.app",
-        "https://YOUR_CUSTOM_DOMAIN.com",
+        "https://ml-play-frontend.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
