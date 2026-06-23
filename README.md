@@ -20,9 +20,7 @@ Interactive ML Lifecycle • AutoML • AI Explanations • Experiment Tracking 
 
 # 🎥 Product Walkthrough
 
-<p align="center">
-  <img src="docs/ML-Play.mp4" width="100%">
-</p>
+🎥 Demo Video: [Watch Here](docs/ML-Play.mp4)
 
 ---
 
@@ -222,7 +220,7 @@ B --> J[Claude/OpenAI]
 > Analyze performance using multiple evaluation metrics.
 
 <p align="center">
-  <img src="docs/screenshots/model-results.png" width="100%">
+  <img src="docs/screenshots/model-values.png" width="100%">
 </p>
 
 ---
