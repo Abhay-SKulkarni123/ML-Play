@@ -1,255 +1,379 @@
-# ML Playground
+# 🧠 ML Play
 
-An interactive, step-by-step machine learning lifecycle tool built with FastAPI, Next.js, and PostgreSQL. Walk through the full ML pipeline from raw data to trained model, with AI explanations at every decision point.
+<p align="center">
+  <img src="docs/assets/banner.png" width="100%">
+</p>
 
-**[Live Demo →](YOUR_RAILWAY_URL)**
+<div align="center">
 
----
+### Build, Compare, Explain & Optimize Machine Learning Pipelines
 
-## What it does
+### Without Writing Code
 
-ML Playground guides you through 13 steps of the ML lifecycle on any tabular dataset:
+Interactive ML Lifecycle • AutoML • AI Explanations • Experiment Tracking • Code Export
 
-1. **Data Profile** — shape, types, missing values, duplicates
-2. **EDA** — distributions, correlation heatmap, target analysis, 3D scatter plots
-3. **Missing Values** — 10 techniques (mean, median, KNN, MICE, indicator, constant, mode, random sample, drop rows/cols)
-4. **Outlier Treatment** — IQR capping, z-score removal, percentile capping, log transform
-5. **Feature Engineering** — polynomial, interaction, log, reciprocal, sqrt, ratio, binning, date decomposition
-6. **Encoding** — one-hot, label, ordinal, frequency, target mean
-7. **Feature Selection** — variance threshold, correlation filter, mutual information
-8. **Dimensionality Reduction** — PCA auto (95% variance) or fixed components
-9. **Scaling** — standard, min-max, robust, max-abs, quantile, power (Yeo-Johnson)
-10. **Model Training** — 15 algorithms with individual hyperparameter panels and live effect previews
-11. **Hyperparameter Tuning** — Bayesian search (Optuna, 60 trials) or Grid Search
-12. **Explainability** — feature importance bar chart and radar view
-13. **Experiment Comparison** — compare any two training runs side by side
+[Live Demo](https://ml-play-frontend.vercel.app) • [API Docs](https://backend-production-dbc5.up.railway.app/docs)
 
-**Also included:**
-- AutoML mode — automatic pipeline with Optuna tuning, available for all datasets
-- Prediction step — enter feature values and get a live prediction from your trained model
-- Python code export — download the full preprocessing and training pipeline as a script
-- AI explanations — every step explained by Claude or GPT with a next-step recommendation
-- Upload your own CSV or Excel dataset
+</div>
 
 ---
 
-## Architecture
+# 🎥 Product Walkthrough
 
-┌─────────────────────────────────────────────────────────┐
-
-│                    Next.js Frontend                      │
-
-│  Landing page · 13-step playground · AutoML tab         │
-
-│  Recharts visualizations · Real-time polling             │
-
-└──────────────────────┬──────────────────────────────────┘
-
-│ HTTP / REST
-
-┌──────────────────────▼──────────────────────────────────┐
-
-│                   FastAPI Backend                        │
-
-│  /sessions  /datasets  /eda  /automl                    │
-
-│  Async routes · ThreadPoolExecutor for ML workloads      │
-
-└──────────┬───────────────────────┬───────────────────────┘
-
-│                       │
-
-┌──────────▼──────┐    ┌──────────▼──────────────────────┐
-
-│   PostgreSQL     │    │         ML Pipeline              │
-
-│   Sessions       │    │  scikit-learn · XGBoost          │
-
-│   Step results   │    │  LightGBM · CatBoost · Optuna    │
-
-│   Training runs  │    │  Split-aware preprocessing       │
-
-└─────────────────┘    └──────────────────────────────────┘
-
-### Key technical decisions
-
-**Split-aware preprocessing pipeline** — all preprocessing steps fit on the training set only and transform the test set separately. This prevents data leakage at every step, which is the most common mistake in beginner ML pipelines.
-
-**Async ML training** — sklearn training is synchronous and CPU-bound. The backend runs it in a `ThreadPoolExecutor` so the FastAPI async event loop stays unblocked. Training has a 120-second timeout with a clean error response.
-
-**Experiment tracking** — every training run is persisted to PostgreSQL with its parameters, metrics, and feature importances. Any two runs can be compared side by side.
-
-**AI explanations with fallback** — the app tries Anthropic Claude, then OpenAI, then falls back to deterministic rule-based explanations. The UI never crashes due to missing API keys.
+<p align="center">
+  <img src="docs/demo.gif" width="100%">
+</p>
 
 ---
 
-## Tech Stack
+# 🚀 Why ML Play?
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | Next.js 14, TypeScript, Tailwind CSS, Recharts |
-| Backend | FastAPI, Python 3.10+, Uvicorn |
-| Database | PostgreSQL 15, SQLAlchemy (async), Alembic |
-| ML | scikit-learn, XGBoost, LightGBM, CatBoost, Optuna |
-| AI | Anthropic Claude API (with OpenAI fallback) |
+Machine Learning workflows are often fragmented across notebooks, scripts, visualization tools, experimentation platforms, and documentation.
+
+ML Play brings the entire machine learning lifecycle into a single interactive platform.
+
+Whether you're a student learning machine learning, a data scientist experimenting with models, or a developer exploring datasets, ML Play provides a visual environment to:
+
+* Upload and analyze datasets
+* Apply preprocessing techniques
+* Train and tune models
+* Compare experiments
+* Understand decisions with AI-powered explanations
+* Export production-ready Python code
 
 ---
 
-## Running locally
+# ✨ Key Features
 
-### Prerequisites
+✅ Data Profiling
 
-- Python 3.10+
-- Node.js 18+
-- PostgreSQL 15
+✅ Exploratory Data Analysis (EDA)
 
-### Backend
+✅ Missing Value Engineering
 
-```bash
-cd backend
-python -m venv venv
-source venv/Scripts/activate   # Windows Git Bash
-pip install -r requirements.txt
+✅ Outlier Treatment
 
-cp .env.example .env
-# Edit .env — add your DATABASE_URL and optionally API keys
+✅ Feature Engineering
 
-alembic upgrade head
+✅ Feature Selection
 
-uvicorn app.main:app --reload --port 8000
+✅ Scaling & Normalization
+
+✅ Model Training
+
+✅ Hyperparameter Optimization
+
+✅ AutoML
+
+✅ AI-Powered Explanations
+
+✅ Experiment Tracking
+
+✅ Python Code Export
+
+---
+
+# 🔄 ML Lifecycle
+
+```mermaid
+flowchart LR
+
+A[Dataset Upload]
+--> B[Data Profiling]
+
+B --> C[EDA]
+
+C --> D[Missing Values]
+
+D --> E[Outlier Treatment]
+
+E --> F[Feature Engineering]
+
+F --> G[Encoding]
+
+G --> H[Feature Selection]
+
+H --> I[Scaling]
+
+I --> J[Model Training]
+
+J --> K[Hyperparameter Tuning]
+
+K --> L[Experiment Comparison]
+
+L --> M[AI Explanation]
+
+M --> N[Code Export]
 ```
+
+---
+
+# 🏗 Architecture
+
+```mermaid
+flowchart TD
+
+A[Next.js Frontend]
+--> B[FastAPI Backend]
+
+B --> C[(PostgreSQL)]
+
+B --> D[ML Engine]
+
+D --> E[Scikit-Learn]
+
+D --> F[XGBoost]
+
+D --> G[LightGBM]
+
+D --> H[CatBoost]
+
+D --> I[Optuna]
+
+B --> J[Claude/OpenAI]
+```
+
+---
+
+# 📸 Screenshots
+
+## 🏠 Home Page
+
+> Replace with your landing page screenshot.
+
+<p align="center">
+  <img src="docs/screenshots/home-page.png" width="100%">
+</p>
+
+---
+
+## 📊 Data Profiling
+
+> Dataset overview, missing value analysis, and feature statistics.
+
+<p align="center">
+  <img src="docs/screenshots/data-profile.png" width="100%">
+</p>
+
+---
+
+## 🔍 Exploratory Data Analysis
+
+> Interactive visualizations and dataset exploration.
+
+<p align="center">
+  <img src="docs/screenshots/eda.png" width="100%">
+</p>
+
+---
+
+## 🧩 Missing Value Engineering
+
+> Compare multiple imputation techniques before applying them.
+
+<p align="center">
+  <img src="docs/screenshots/missing-values.png" width="100%">
+</p>
+
+---
+
+## 👀 Transformation Preview
+
+> Preview dataset changes before execution.
+
+<p align="center">
+  <img src="docs/screenshots/transformation-preview.png" width="100%">
+</p>
+
+---
+
+## 🤖 AI-Powered Explanations
+
+> Understand what changed, why it changed, and recommended next steps.
+
+<p align="center">
+  <img src="docs/screenshots/ai-explanation.png" width="100%">
+</p>
+
+---
+
+## 🎯 Model Training
+
+> Train machine learning models with configurable hyperparameters.
+
+<p align="center">
+  <img src="docs/screenshots/model-selection.png" width="100%">
+</p>
+
+---
+
+## ⚙ Hyperparameter Optimization
+
+> Fine-tune models using interactive controls.
+
+<p align="center">
+  <img src="docs/screenshots/hyperparameters.png" width="100%">
+</p>
+
+---
+
+## 📈 Model Evaluation
+
+> Analyze performance using multiple evaluation metrics.
+
+<p align="center">
+  <img src="docs/screenshots/model-results.png" width="100%">
+</p>
+
+---
+
+## 🏆 Experiment Comparison
+
+> Compare multiple model runs side-by-side.
+
+<p align="center">
+  <img src="docs/screenshots/comparison-results.png" width="100%">
+</p>
+
+---
+
+## ⚡ AutoML
+
+> One-click optimization using automated model selection and tuning.
+
+<p align="center">
+  <img src="docs/screenshots/automl.png" width="100%">
+</p>
+
+---
+
+# 💻 Tech Stack
 
 ### Frontend
 
+* Next.js
+* TypeScript
+* Tailwind CSS
+* Recharts
+
+### Backend
+
+* FastAPI
+* Python
+* SQLAlchemy
+* Alembic
+
+### Database
+
+* PostgreSQL
+
+### Machine Learning
+
+* Scikit-Learn
+* XGBoost
+* LightGBM
+* CatBoost
+* Optuna
+
+### AI Integration
+
+* Anthropic Claude
+* OpenAI
+
+### Deployment
+
+* Vercel
+* Railway
+
+---
+
+# 📂 Project Structure
+
+```text
+ML-Play
+│
+├── frontend
+│
+├── backend
+│
+├── docs
+│   ├── screenshots
+│   └── demo.gif
+│
+└── README.md
+```
+
+---
+
+# 🚀 Quick Start
+
+## Clone Repository
+
+```bash
+git clone https://github.com/Abhay-SKulkarni123/ML-Play.git
+
+cd ML-Play
+```
+
+## Backend Setup
+
+```bash
+cd backend
+
+python -m venv venv
+
+pip install -r requirements.txt
+
+alembic upgrade head
+
+uvicorn app.main:app --reload
+```
+
+## Frontend Setup
+
 ```bash
 cd frontend
+
 npm install
-cp .env.local.example .env.local
-# Set NEXT_PUBLIC_API_URL=http://localhost:8000
 
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+---
+
+# 🌟 What I Learned
+
+Building ML Play provided hands-on experience with:
+
+* End-to-End Product Development
+* Backend Architecture
+* Machine Learning Pipelines
+* AutoML Workflows
+* AI Integration
+* Experiment Tracking
+* Database Design
+* Production Deployment
 
 ---
 
-## Environment variables
+# 🔗 Links
 
-### `backend/.env`
-DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/ml_playground
+### Live Application
 
-ANTHROPIC_API_KEY=            # optional — enables real AI explanations
+https://ml-play-frontend.vercel.app
 
-OPENAI_API_KEY=               # optional — fallback AI provider
+### Backend API
 
-LLM_PROVIDER=anthropic        # anthropic | openai | none
+https://backend-production-dbc5.up.railway.app/docs
 
-### `frontend/.env.local`
-NEXT_PUBLIC_API_URL=http://localhost:8000
+### GitHub Repository
 
----
-
-## Deploying
-
-### Backend → Railway
-
-```bash
-npm install -g @railway/cli
-railway login
-cd backend
-railway init
-railway add postgresql
-railway up
-```
-
-Set `DATABASE_URL` and optional API keys in the Railway dashboard environment variables. Railway auto-detects Python and installs from `requirements.txt`.
-
-### Frontend → Vercel
-
-```bash
-npm install -g vercel
-cd frontend
-vercel
-```
-
-When prompted for environment variables, set `NEXT_PUBLIC_API_URL` to your Railway backend URL.
-
-After deploying, run migrations on Railway:
-
-```bash
-railway run alembic upgrade head
-```
+https://github.com/Abhay-SKulkarni123/ML-Play
 
 ---
 
-## Project structure
-ml-playground/
+<div align="center">
 
-├── README.md
+Built with ❤️ by Abhay Sridhar Kulkarni
 
-├── .gitignore
-
-├── backend/
-
-│   ├── .env.example
-
-│   ├── requirements.txt
-
-│   ├── Procfile
-
-│   ├── railway.json
-
-│   ├── alembic.ini
-
-│   ├── migrations/
-
-│   └── app/
-
-│       ├── main.py
-
-│       ├── core/           # database.py, config.py
-
-│       ├── models/         # SQLAlchemy models
-
-│       ├── routers/        # sessions, datasets, eda, automl
-
-│       ├── schemas/        # Pydantic schemas
-
-│       └── services/
-
-│           ├── ml/         # preprocessing, training, dataset
-
-│           ├── ai/         # explainer
-
-│           └── export/     # code_gen
-
-└── frontend/
-
-├── app/
-
-│   ├── page.tsx             # Landing page + AutoML tab
-
-│   └── playground/
-
-│       └── [sessionId]/
-
-│           └── page.tsx     # 13-step playground
-
-└── lib/
-
-└── api.ts               # Typed API client
-
----
-
-## Resume bullets
-
-- Built an end-to-end interactive ML lifecycle platform (FastAPI, Next.js, PostgreSQL) with a split-aware preprocessing pipeline that prevents data leakage across 13 configurable steps supporting 15 algorithms
-- Implemented async ML training with ThreadPoolExecutor, Optuna Bayesian hyperparameter search (60 trials), full experiment tracking with run comparison, and Python pipeline code export
-- Integrated Anthropic Claude AI explanations with OpenAI fallback and deterministic rule-based fallback, plus AutoML background jobs with real-time progress polling via interval-based status endpoint
-
----
-
-## License
-
-MIT
+</div>
