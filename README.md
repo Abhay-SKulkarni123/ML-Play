@@ -21,7 +21,7 @@ Interactive ML Lifecycle • AutoML • AI Explanations • Experiment Tracking 
 # 🎥 Product Walkthrough
 
 <p align="center">
-  <img src="docs/demo.gif" width="100%">
+  <img src="docs/ML-Play.mp4" width="100%">
 </p>
 
 ---
@@ -202,7 +202,7 @@ B --> J[Claude/OpenAI]
 > Train machine learning models with configurable hyperparameters.
 
 <p align="center">
-  <img src="docs/screenshots/model-selection.png" width="100%">
+  <img src="docs/screenshots/model-training.png" width="100%">
 </p>
 
 ---
@@ -297,8 +297,9 @@ ML-Play
 ├── backend
 │
 ├── docs
-│   ├── screenshots
-│   └── demo.gif
+│   |-- screenshots
+|   |-- assets
+│   |-- ML-Play.mp4
 │
 └── README.md
 ```
@@ -373,7 +374,6 @@ https://github.com/Abhay-SKulkarni123/ML-Play
 ---
 
 <div align="center">
-
-Built with ❤️ by Abhay Sridhar Kulkarni
+Built by -> A S K
 
 </div>
