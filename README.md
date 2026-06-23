@@ -20,9 +20,15 @@ Interactive ML Lifecycle • AutoML • AI Explanations • Experiment Tracking 
 
 # 🎥 Product Walkthrough
 
-▶ **Demo Video (Click to Watch)**
+<p align="center">
 
-[ML Play Demo](./docs/ML-Play.mp4)
+### 🎬 ML Play Demo
+
+<a href="https://drive.google.com/file/d/194hkiAWBgKLcuj67Epshhiflu6pE1Blg/view?usp=sharing">
+    Watch Full Demo Video
+</a>
+
+</p>
 
 ---
 
@@ -192,7 +198,7 @@ B --> J[Claude/OpenAI]
 > Understand what changed, why it changed, and recommended next steps.
 
 <p align="center">
-  <img src="docs/screenshots/ai-explanation.png" width="80%">
+  <img src="docs/screenshots/ai-explaination.png" width="80%">
 </p>
 
 ---
@@ -212,7 +218,7 @@ B --> J[Claude/OpenAI]
 > Fine-tune models using interactive controls.
 
 <p align="center">
-  <img src="docs/screenshots/hyperparameters.png" width="80%">
+  <img src="docs/screenshots/hyperparameters.png" width="60%">
 </p>
 
 ---
@@ -232,7 +238,7 @@ B --> J[Claude/OpenAI]
 > One-click optimization using automated model selection and tuning.
 
 <p align="center">
-  <img src="docs/screenshots/automl.png" width="80%">
+  <img src="docs/screenshots/automl.png" width="60%">
 </p>
 
 ---
