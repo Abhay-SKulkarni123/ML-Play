@@ -20,7 +20,9 @@ Interactive ML Lifecycle • AutoML • AI Explanations • Experiment Tracking 
 
 # 🎥 Product Walkthrough
 
-🎥 Demo Video: [Watch Here](docs/ML-Play.mp4)
+▶ **Demo Video (Click to Watch)**
+
+[ML Play Demo](./docs/ML-Play.mp4)
 
 ---
 
@@ -140,7 +142,7 @@ B --> J[Claude/OpenAI]
 > Replace with your landing page screenshot.
 
 <p align="center">
-  <img src="docs/screenshots/home-page.png" width="100%">
+  <img src="docs/screenshots/home-page.png" width="80%">
 </p>
 
 ---
@@ -150,7 +152,7 @@ B --> J[Claude/OpenAI]
 > Dataset overview, missing value analysis, and feature statistics.
 
 <p align="center">
-  <img src="docs/screenshots/data-profile.png" width="100%">
+  <img src="docs/screenshots/data-profile.png" width="80%">
 </p>
 
 ---
@@ -160,7 +162,7 @@ B --> J[Claude/OpenAI]
 > Interactive visualizations and dataset exploration.
 
 <p align="center">
-  <img src="docs/screenshots/eda.png" width="100%">
+  <img src="docs/screenshots/eda.png" width="80%">
 </p>
 
 ---
@@ -170,7 +172,7 @@ B --> J[Claude/OpenAI]
 > Compare multiple imputation techniques before applying them.
 
 <p align="center">
-  <img src="docs/screenshots/missing-values.png" width="100%">
+  <img src="docs/screenshots/missing-values.png" width="80%">
 </p>
 
 ---
@@ -180,7 +182,7 @@ B --> J[Claude/OpenAI]
 > Preview dataset changes before execution.
 
 <p align="center">
-  <img src="docs/screenshots/transformation-preview.png" width="100%">
+  <img src="docs/screenshots/transformation-preview.png" width="80%">
 </p>
 
 ---
@@ -190,7 +192,7 @@ B --> J[Claude/OpenAI]
 > Understand what changed, why it changed, and recommended next steps.
 
 <p align="center">
-  <img src="docs/screenshots/ai-explanation.png" width="100%">
+  <img src="docs/screenshots/ai-explanation.png" width="80%">
 </p>
 
 ---
@@ -200,7 +202,7 @@ B --> J[Claude/OpenAI]
 > Train machine learning models with configurable hyperparameters.
 
 <p align="center">
-  <img src="docs/screenshots/model-training.png" width="100%">
+  <img src="docs/screenshots/model-training.png" width="80%">
 </p>
 
 ---
@@ -210,17 +212,7 @@ B --> J[Claude/OpenAI]
 > Fine-tune models using interactive controls.
 
 <p align="center">
-  <img src="docs/screenshots/hyperparameters.png" width="100%">
-</p>
-
----
-
-## 📈 Model Evaluation
-
-> Analyze performance using multiple evaluation metrics.
-
-<p align="center">
-  <img src="docs/screenshots/model-values.png" width="100%">
+  <img src="docs/screenshots/hyperparameters.png" width="80%">
 </p>
 
 ---
@@ -230,7 +222,7 @@ B --> J[Claude/OpenAI]
 > Compare multiple model runs side-by-side.
 
 <p align="center">
-  <img src="docs/screenshots/comparison-results.png" width="100%">
+  <img src="docs/screenshots/comparison-results.png" width="80%">
 </p>
 
 ---
@@ -240,7 +232,7 @@ B --> J[Claude/OpenAI]
 > One-click optimization using automated model selection and tuning.
 
 <p align="center">
-  <img src="docs/screenshots/automl.png" width="100%">
+  <img src="docs/screenshots/automl.png" width="80%">
 </p>
 
 ---
